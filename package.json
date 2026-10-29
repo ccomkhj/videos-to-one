@@ -1,0 +1,20 @@
+{
+  "name": "videos-to-one",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": ["shared", "server", "web"],
+  "scripts": {
+    "dev": "npm run dev -w server & npm run dev -w web",
+    "build": "npm run build -w web",
+    "start": "npm run start -w server",
+    "typecheck": "tsc -p shared --noEmit && tsc -p server --noEmit && tsc -p web --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.6"
+  },
+  "engines": { "node": ">=22" }
+}

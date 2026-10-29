@@ -1,0 +1,18 @@
+{
+  "name": "@vto/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@fastify/multipart": "^10.1.6",
+    "@fastify/static": "^10.1.8",
+    "@vto/shared": "*",
+    "fastify": "^5.12.7",
+    "geo-tz": "^8.1.10",
+    "tsx": "^4.23.15"
+  }
+}
