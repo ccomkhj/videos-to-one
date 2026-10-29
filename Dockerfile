@@ -11,7 +11,10 @@ COPY tsconfig.base.json ./
 COPY shared shared
 COPY server server
 COPY web web
-RUN npm run build && npm prune --omit=dev
+# Orientation-detection models (~82 MB, sha256-checked); sideways-clip suggestions need them.
+RUN npm run models
+RUN npm run build && npm prune --omit=dev \
+ && rm -rf node_modules/onnxruntime-node/bin/napi-v6/darwin node_modules/onnxruntime-node/bin/napi-v6/win32
 
 FROM node:22-bookworm-slim
 # Debian's ffmpeg has libx264, libx265, libfreetype (drawtext) and libzimg (zscale).
@@ -26,6 +29,7 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=8080 \
     DATA_DIR=/data \
+    ORT_DISABLE_TELEMETRY=1 \
     FONT_LATIN=/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf \
     FONT_CJK=/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 COPY --from=build /app/package.json ./
@@ -34,6 +38,7 @@ COPY --from=build /app/shared shared
 COPY --from=build /app/server server
 COPY --from=build /app/web/package.json web/package.json
 COPY --from=build /app/web/dist web/dist
+COPY --from=build /app/models models
 VOLUME /data
 EXPOSE 8080
 CMD ["node_modules/.bin/tsx", "server/src/main.ts"]

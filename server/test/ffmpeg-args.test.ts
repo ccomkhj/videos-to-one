@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assembleArgs, encoderProbeArgs, loudnessArgs, proxyArgs, segmentArgs, stripArgs } from '../src/ffmpeg-args.ts';
+import { assembleArgs, encoderProbeArgs, loudnessArgs, proxyArgs, rotateFilter, segmentArgs, stripArgs } from '../src/ffmpeg-args.ts';
 import type { ClipSegment, Plan, TitleSegment } from '../src/plan.ts';
 
 const fonts = { latin: '/fonts/NotoSans-Regular.ttf', cjk: '/fonts/NotoSansCJK-Regular.ttc' };
@@ -135,5 +135,29 @@ describe('ingest and loudness args', () => {
         { start: 5, end: 8 },
       ]),
     ).toMatchSnapshot();
+  });
+});
+
+describe('manual rotation', () => {
+  it('maps clockwise quarter turns to transpose/flip filters', () => {
+    expect([0, 90, 180, 270, undefined].map((r) => rotateFilter(r as 0 | undefined))).toEqual([
+      null,
+      'transpose=clock',
+      'hflip,vflip',
+      'transpose=cclock',
+      null,
+    ]);
+  });
+
+  it('turns a segment right after resetting its timestamps', () => {
+    const graph = (r: 90 | 270) => segmentArgs(seg({ rotate: r }), basePlan(), { out: '/r/0.mkv', fonts, texts }).join(' ');
+    expect(segmentArgs(seg({ rotate: 90 }), basePlan(), { out: '/r/0.mkv', fonts, texts })).toMatchSnapshot();
+    expect(graph(90)).toContain('[0:v]setpts=PTS-STARTPTS,transpose=clock,fps=30');
+    expect(graph(270)).toContain('[0:v]setpts=PTS-STARTPTS,transpose=cclock,fps=30');
+  });
+
+  it('turns the filmstrip', () => {
+    expect(stripArgs('/c/proxy.mp4', 12, '/c/strip.jpg', 270)).toMatchSnapshot();
+    expect(stripArgs('/c/proxy.mp4', 12, '/c/strip.jpg', 0)).toEqual(stripArgs('/c/proxy.mp4', 12, '/c/strip.jpg'));
   });
 });

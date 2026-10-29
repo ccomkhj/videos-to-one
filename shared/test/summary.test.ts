@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HLG, originalGains, type Clip, type MediaInfo } from '../src/index.ts';
+import { defaultAspect, displaySize, HLG, inputSummary, orientation, originalGains, type Clip, type MediaInfo } from '../src/index.ts';
 
 const clip = (m: Partial<MediaInfo>): Clip =>
   ({
@@ -26,5 +26,21 @@ describe('originalGains', () => {
     expect(originalGains([hlg, hlg], '16:9').hdr).toBe(true);
     expect(originalGains([hlg, clip({})], '16:9').hdr).toBe(false);
     expect(originalGains([clip({ hdr: true, colorTransfer: 'smpte2084' })], '16:9').hdr).toBe(false);
+  });
+});
+
+describe('manual rotation', () => {
+  it('swaps the display size for quarter turns only', () => {
+    expect(displaySize({ ...clip({}), rotate: 90 })).toEqual({ width: 1080, height: 1920 });
+    expect(displaySize({ ...clip({}), rotate: 270 })).toEqual({ width: 1080, height: 1920 });
+    expect(displaySize({ ...clip({}), rotate: 180 })).toEqual({ width: 1920, height: 1080 });
+    expect(displaySize(clip({}))).toEqual({ width: 1920, height: 1080 });
+  });
+
+  it('counts a rotated clip in its new orientation for the default aspect and summary', () => {
+    const turned: Clip = { ...clip({ width: 1080, height: 1920 }), rotate: 90 };
+    expect(orientation(turned)).toBe('landscape');
+    expect(defaultAspect([turned])).toBe('16:9');
+    expect(inputSummary([turned, clip({})])).toMatch(/^All landscape/);
   });
 });

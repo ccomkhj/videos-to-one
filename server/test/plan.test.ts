@@ -128,6 +128,18 @@ describe('buildPlan', () => {
     expect(buildPlan(input(small, { preset: 'original' })).canvas).toEqual({ width: 1920, height: 1080 });
   });
 
+  it('sizes the original canvas from rotated clips and passes the rotation to their segments', () => {
+    // A 2160×3840 portrait clip turned sideways is 3840 wide.
+    const turned = clip({ media: { width: 2160, height: 3840 }, rotate: 90 });
+    const plan = buildPlan(input([turned, clip({ media: { width: 1080, height: 1920 } })], { preset: 'original', aspect: '1:1' }));
+    expect(plan.canvas).toEqual({ width: 2160, height: 2160 });
+    expect(plan.segments.map((s) => (s.kind === 'clip' ? s.rotate : null))).toEqual([90, undefined]);
+    expect(buildPlan(input([clip({ media: { width: 1080, height: 1920 }, rotate: 270 })], { preset: 'original' })).canvas).toEqual({
+      width: 1920,
+      height: 1080,
+    });
+  });
+
   it('picks the frame rate with the most kept duration, snapped and capped at 60', () => {
     expect(buildPlan(input([clip({ media: { fps: 29.97, duration: 10 } }), clip({ media: { fps: 60, duration: 5 } })])).fps).toBe(30);
     expect(buildPlan(input([clip({ media: { fps: 240, duration: 10 } })])).fps).toBe(60);

@@ -140,6 +140,8 @@ export function App() {
                 });
               }}
               onDelete={(id) => act(api.deleteClip(id))}
+              onRotate={(id, r) => act(api.setRotate(id, r))}
+              onKeep={(id) => act(api.dismissSuggestion(id))}
             />
           )}
         </section>

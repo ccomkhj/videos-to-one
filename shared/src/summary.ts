@@ -12,9 +12,15 @@ export function snapFps(fps: number): number {
 
 export type Orientation = 'landscape' | 'portrait' | 'square';
 
-export function orientation(c: Clip): Orientation {
+/** Display size after the manual rotation. */
+export function displaySize(c: Clip): { width: number; height: number } {
   const w = c.media?.width ?? 0;
   const h = c.media?.height ?? 0;
+  return c.rotate === 90 || c.rotate === 270 ? { width: h, height: w } : { width: w, height: h };
+}
+
+export function orientation(c: Clip): Orientation {
+  const { width: w, height: h } = displaySize(c);
   if (Math.abs(w - h) <= Math.max(w, h) * 0.02) return 'square';
   return w > h ? 'landscape' : 'portrait';
 }

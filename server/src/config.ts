@@ -15,6 +15,9 @@ export interface Config {
   encoder: EncoderSetting;
   vaapiDevice: string;
   fonts: Fonts;
+  /** ONNX models for sideways-clip suggestions (`npm run models`). */
+  modelsDir: string;
+  orientation: 'on' | 'off';
   webDist: string | null;
   version: string;
 }
@@ -34,6 +37,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     encoder: ENCODER_SETTINGS.find((e) => e === env.ENCODER?.trim().toLowerCase()) ?? 'auto',
     vaapiDevice: env.VAAPI_DEVICE?.trim() || '/dev/dri/renderD128',
     fonts: resolveFonts(env),
+    modelsDir: path.resolve(env.MODELS_DIR ?? path.resolve(here, '../../models')),
+    orientation: env.ORIENTATION?.trim().toLowerCase() === 'off' ? 'off' : 'on',
     webDist: existsSync(path.join(webDist, 'index.html')) ? webDist : null,
     version: env.APP_VERSION ?? '0.1.0',
   };
@@ -48,6 +53,9 @@ const CJK = [
   '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
   '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
   '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+  // macOS: Hangul, kana and Han in one face.
+  '/System/Library/Fonts/Supplemental/Arial Unicode.ttf',
+  '/System/Library/Fonts/AppleSDGothicNeo.ttc',
 ];
 
 function resolveFonts(env: NodeJS.ProcessEnv): Fonts {

@@ -16,7 +16,8 @@ The product is the comfort of that flow. Every feature below is measured against
 ### Principles
 
 1. **Sensible defaults, almost no settings.** The default output needs zero decisions.
-2. **Cutting is the only editing tool.** No speed, filters, rotation, crop, or effects.
+2. **Cutting is the only editing tool**, plus quarter-turn rotation for sideways clips.
+   No speed, filters, crop, or effects.
 3. **Local and private.** Runs on your own computer, with no cloud and no accounts.
    The only outbound call is the optional place-name lookup.
 4. **Any phone.** Tuned for iPhone files, but it works with any phone video that
@@ -42,7 +43,7 @@ The product is the comfort of that flow. Every feature below is measured against
 
 ### Explicit non-goals
 
-- Filters, color grading, speed changes / slow motion, manual rotation or crop.
+- Filters, color grading, speed changes / slow motion, crop, or free-angle rotation.
 - Overlay styling options (font, color, position, size).
 - Accounts, auth, multiple users, or LAN access protection (**decided: no protection**).
 - Cloud/remote hosting.
@@ -101,6 +102,8 @@ layout with a drop zone and QR code on the laptop.
   - drag handle (touch and mouse) and delete
   - status while processing: uploading % → analyzing → ready, or an error
   - a hint icon when location or date is missing (see §8, risk R1)
+  - **↻ Looks sideways** with **Rotate** / **Keep** when detection suggests a turn (§5.8)
+- A banner "N clips look rotated — **Fix all**" applies every open suggestion at once.
 - **Sort by date** action: re-applies chronological order after manual drags.
 - **Export** button (sticky at the bottom on phones).
 - An overflow menu with **Start over**, which asks for confirmation and clears the session.
@@ -112,6 +115,8 @@ layout with a drop zone and QR code on the laptop.
 - **Split at playhead** divides the timeline into segments. Tapping a segment toggles
   **Remove / Restore**. Removed segments are shaded and skipped during playback.
 - **Reset** restores the full clip. **Done** returns to the list.
+- **⟲ / ⟳** turn the clip 90° and save at once. The preview turns the proxy with CSS;
+  the filmstrip is regenerated, and the render applies the turn (§5.8).
 - The minimum kept segment is 1.0 s, so crossfades have room. Edits snap to 0.1 s
   granularity; the render is frame-accurate.
 
@@ -257,6 +262,30 @@ part of a clip therefore doesn't change that clip's volume much.
 **Filename and location:** `<title or date range or "videos-to-one">_<YYYYMMDD-HHMM>.mp4`,
 written to `/data/output/` and offered as a download.
 
+### 5.8 Rotation and sideways suggestions
+
+Some phone clips are recorded with the wrong display matrix (e.g. a landscape scene
+filmed as portrait), so the automatic rotation (§5.1) shows them sideways. The phone's
+own orientation metadata agrees with the wrong matrix, so it can't catch this.
+
+- **Manual rotation:** each clip stores `rotate` (0/90/180/270, clockwise), applied after
+  the display matrix. Rotated clips count in their new orientation for the default
+  aspect, the input summary, and the Original-quality canvas.
+- **Detection** runs after a clip is ready, one clip at a time, so it never delays editing.
+  Six frames are sampled from the SDR proxy at the middle of each sixth of the clip.
+  1. **Faces** (UltraFace RFB-320): each frame is turned 0/90/180/270 and counted per
+     turn when it has a face with score ≥ 0.9. Faces decide when the top turn has
+     ≥ 2 frames and at least twice the count of any other turn.
+  2. Otherwise an **orientation CNN** (EfficientNetV2, 4 classes) decides: suggest a turn
+     only if its mean probability is ≥ 0.7 and ≥ 4 of 6 frames agree; otherwise none.
+- The result is only a suggestion. **Keep** dismisses it; it is never applied silently.
+- Models (~82 MB, MIT) are downloaded by `npm run models` and baked into the Docker
+  image. Without them, or with `ORIENTATION=off`, detection is skipped and manual
+  rotation still works. Clips already in the session when the app starts are checked.
+
+Measured on 45 iPhone clips: about 0.9 s per clip on an M-series Mac; 3 clips flagged,
+all genuinely sideways, no false positives.
+
 ## 6. Architecture
 
 ### 6.1 Stack
@@ -282,7 +311,7 @@ static build both work; this gets verified in the Docker milestone.
 /data/session/session.json            the single working session (clips, order, keep ranges)
 /data/session/clips/<id>/original.*   uploaded file, untouched
 /data/session/clips/<id>/proxy.mp4    720p H.264 SDR, 1 s GOP, for fast seeking in the editor
-/data/session/clips/<id>/strip.jpg    filmstrip thumbnails for the timeline
+/data/session/clips/<id>/strip.jpg    filmstrip thumbnails for the timeline (rotated)
 /data/session/render/                 temporary intermediates, deleted after render
 /data/output/*.mp4                    finished videos (kept by "Start over")
 /data/cache/geocode.json              reverse-geocoding cache
@@ -295,7 +324,7 @@ static build both work; this gets verified in the Docker milestone.
 | GET | `/api/session` | Current session state |
 | POST | `/api/clips` | Upload one file (multipart, streamed to disk), returns a clip record |
 | DELETE | `/api/clips/:id` | Remove a clip |
-| PATCH | `/api/clips/:id` | Update keep ranges |
+| PATCH | `/api/clips/:id` | Any of `{segments, rotate, dismissSuggestion: true}`; a rotate regenerates the filmstrip |
 | PUT | `/api/order` | Set clip order (`{ids}`), or `{sort: "date"}` |
 | POST | `/api/session/reset` | Start over |
 | GET | `/api/clips/:id/proxy.mp4`, `/strip.jpg` | Editor media (HTTP range requests supported) |
@@ -315,14 +344,15 @@ static build both work; this gets verified in the Docker milestone.
 
 **On upload:** stream to disk, then run ffprobe and extract metadata (§5.2). After that,
 look up the timezone (offline) and place name (cached or online), and generate the proxy
-and filmstrip. The clip is marked ready when this finishes.
+and filmstrip. The clip is marked ready when this finishes; it is then queued for
+sideways detection (§5.8).
 
 **On export**
 
 1. **Plan.** Build the ordered list of segments, then compute the canvas, frame rate, HDR
    handling, per-clip loudness gain, and xfade offsets.
 2. **Normalize each segment** into a high-quality intermediate file. This step decodes
-   with `-ss/-to`, auto-rotates, tone-maps if needed, applies the fps, adds blur fill or
+   with `-ss/-to`, auto-rotates, applies the manual rotation, tone-maps if needed, applies the fps, adds blur fill or
    bars, sets the SAR, draws the overlay text on the clip's first segment, and
    resamples the audio and applies the clip's gain (or adds silence).
 3. **Title card**, if a title was entered, is rendered the same way.
@@ -352,6 +382,8 @@ All configuration is through environment variables. There is no settings UI.
 | `PLACE_LANGUAGE` | `en` | Language for place names |
 | `ENCODER` | `auto` | Final encoder: `auto`, `software`, `videotoolbox`, `nvenc` or `vaapi` (§6.4 step 4) |
 | `VAAPI_DEVICE` | `/dev/dri/renderD128` | VAAPI render node |
+| `ORIENTATION` | `on` | `off` skips sideways detection (§5.8) |
+| `MODELS_DIR` | `<repo>/models` (`/app/models` in Docker) | ONNX models for detection |
 
 ## 8. Risks and spikes
 
@@ -430,5 +462,6 @@ All configuration is through environment variables. There is no settings UI.
 | LAN protection | None |
 | Preview | Per-clip only |
 | v1 extras | Title card only (music and photos maybe later) |
-| Out of scope | Filters, speed, rotation/crop |
+| Out of scope | Filters, speed, crop |
+| Rotation (2026-10-29) | Manual 90° turns per clip, plus suggestions from a face detector with an orientation-CNN fallback; never applied automatically |
 | Test devices | iPhone (Android via synthetic fixtures) |

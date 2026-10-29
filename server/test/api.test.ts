@@ -49,7 +49,7 @@ const json = (method: string, body: unknown) => ({
 beforeAll(async () => {
   root = mkdtempSync(path.join(tmpdir(), 'vto-'));
   clips = makeClips(mkdtempSync(path.join(root, 'src-')));
-  const config = loadConfig({ DATA_DIR: path.join(root, 'data'), TZ: 'Europe/Berlin', PUBLIC_HOST: '192.168.1.23', PORT: '8080', WEB_DIST: '/nonexistent' });
+  const config = loadConfig({ DATA_DIR: path.join(root, 'data'), TZ: 'Europe/Berlin', PUBLIC_HOST: '192.168.1.23', PORT: '8080', WEB_DIST: '/nonexistent', ORIENTATION: 'off' });
   app = await buildApp(config, {
     geocoder: {
       placeAt: async (loc) => {
@@ -141,6 +141,39 @@ describe('editing and ordering', () => {
 
     const bad = await fetch(`${base}/api/clips/${paris.id}`, json('PATCH', { segments: [{ start: 0, end: 0.4, removed: false }] }));
     expect(bad.status).toBe(400);
+  });
+
+  it('stores a manual rotation, rejects invalid ones, and regenerates the filmstrip', async () => {
+    const paris = (await session()).clips[1]!;
+    const stripWidth = async () => {
+      const { stdout } = await run('ffprobe', ['-v', 'error', '-show_entries', 'stream=width', '-of', 'csv=p=0', path.join(app.store.clipDir(paris.id), 'strip.jpg')]);
+      return Number(stdout.trim());
+    };
+    const before = await stripWidth();
+
+    const bad = await fetch(`${base}/api/clips/${paris.id}`, json('PATCH', { rotate: 45 }));
+    expect(bad.status).toBe(400);
+
+    const ok = await fetch(`${base}/api/clips/${paris.id}`, json('PATCH', { rotate: 90 }));
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as Clip).rotate).toBe(90);
+    await app.ingest.restrip(paris.id);
+    const turned = app.store.get(paris.id)!;
+    expect(turned.stripRev).toBeGreaterThanOrEqual(1);
+    expect(turned.segments).toHaveLength(3); // cuts are untouched
+    expect(await stripWidth()).toBeLessThan(before);
+
+    await fetch(`${base}/api/clips/${paris.id}`, json('PATCH', { rotate: 0 }));
+    await app.ingest.restrip(paris.id);
+    expect(await stripWidth()).toBe(before);
+  });
+
+  it('dismisses an orientation suggestion', async () => {
+    const paris = (await session()).clips[1]!;
+    app.store.update(paris.id, { orientation: { suggested: 90, source: 'model', confidence: 0.9 } });
+    const res = await fetch(`${base}/api/clips/${paris.id}`, json('PATCH', { dismissSuggestion: true }));
+    expect(((await res.json()) as Clip).orientation).toEqual({ suggested: 90, source: 'model', confidence: 0.9, dismissed: true });
+    expect((await fetch(`${base}/api/clips/${paris.id}`, json('PATCH', {}))).status).toBe(400);
   });
 
   it('keeps a manual order, appends new uploads after it, and re-sorts by date', async () => {

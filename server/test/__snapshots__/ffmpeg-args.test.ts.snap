@@ -443,6 +443,71 @@ exports[`ingest and loudness args > builds proxy, filmstrip and loudness command
 ]
 `;
 
+exports[`manual rotation > turns a segment right after resetting its timestamps 1`] = `
+[
+  "-hide_banner",
+  "-nostdin",
+  "-y",
+  "-loglevel",
+  "error",
+  "-ss",
+  "1.5",
+  "-t",
+  "6",
+  "-i",
+  "/data/session/clips/a/original.mov",
+  "-filter_complex",
+  "[0:v]setpts=PTS-STARTPTS,transpose=clock,fps=30,tpad=stop_mode=clone:stop_duration=1,split=2[bg][fg];[bg]scale=480:270:force_original_aspect_ratio=increase,crop=480:270,gblur=sigma=12,eq=brightness=-0.12,scale=1920:1080,setsar=1[bgb];[fg]scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1[fgs];[bgb][fgs]overlay=(W-w)/2:(H-h)/2,drawtext=fontfile='/fonts/NotoSans-Regular.ttf':textfile='/r/0-place.txt':expansion=none:fontcolor=white:fontsize=49:x=43:y=934:shadowcolor=black@0.55:shadowx=2:shadowy=2:alpha='if(lt(t,0.3),t/0.3,if(lt(t,3.5),1,max(0,(4-t)/0.5)))':enable='lt(t,4)',drawtext=fontfile='/fonts/NotoSans-Regular.ttf':textfile='/r/0-date.txt':expansion=none:fontcolor=white:fontsize=37:x=43:y=1000:shadowcolor=black@0.55:shadowx=2:shadowy=2:alpha='if(lt(t,0.3),t/0.3,if(lt(t,3.5),1,max(0,(4-t)/0.5)))':enable='lt(t,4)',format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709[v];[0:a]asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=3.2dB,apad[a]",
+  "-map",
+  "[v]",
+  "-map",
+  "[a]",
+  "-t",
+  "6",
+  "-c:v",
+  "libx264",
+  "-preset",
+  "veryfast",
+  "-crf",
+  "12",
+  "-pix_fmt",
+  "yuv420p",
+  "-color_primaries",
+  "bt709",
+  "-color_trc",
+  "bt709",
+  "-colorspace",
+  "bt709",
+  "-c:a",
+  "pcm_s16le",
+  "-progress",
+  "pipe:1",
+  "-nostats",
+  "-f",
+  "matroska",
+  "/r/0.mkv",
+]
+`;
+
+exports[`manual rotation > turns the filmstrip 1`] = `
+[
+  "-hide_banner",
+  "-nostdin",
+  "-y",
+  "-loglevel",
+  "error",
+  "-i",
+  "/c/proxy.mp4",
+  "-vf",
+  "transpose=cclock,fps=0.833,scale=-2:120,tile=10x1",
+  "-frames:v",
+  "1",
+  "-q:v",
+  "4",
+  "/c/strip.jpg",
+]
+`;
+
 exports[`segmentArgs > normalizes an SDR clip with blur fill, overlay and gain 1`] = `
 [
   "-hide_banner",
