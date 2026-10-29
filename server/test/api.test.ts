@@ -189,6 +189,8 @@ describe('export', () => {
     const v = probe.streams.find((x: any) => x.codec_type === 'video');
     const a = probe.streams.find((x: any) => x.codec_type === 'audio');
     expect(v).toMatchObject({ codec_name: 'h264', width: 1920, height: 1080, pix_fmt: 'yuv420p', avg_frame_rate: '60/1' });
+    // The title card comes first; its color tags must not be lost (it's generated, not decoded).
+    expect(v).toMatchObject({ color_primaries: 'bt709', color_transfer: 'bt709', color_space: 'bt709' });
     expect(a).toMatchObject({ codec_name: 'aac', sample_rate: '48000', channels: 2 });
     // title 3 + kyoto 3 + paris (1.5 + 1.5) + rotated 3, minus 4 crossfades of 0.5 s
     expect(Number(probe.format.duration)).toBeCloseTo(10, 1);

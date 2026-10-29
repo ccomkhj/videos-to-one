@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { keepRanges, type Clip, type ExportOptions, type RenderState } from '@vto/shared';
+import { keepRanges, type Clip, type ExportOptions, type Preset, type RenderState } from '@vto/shared';
 import { assembleArgs, segmentArgs, type Fonts } from './ffmpeg-args.ts';
 import { CancelledError, measureLoudness, run } from './ffmpeg.ts';
 import { originalPath } from './ingest.ts';
@@ -17,11 +17,28 @@ export interface RendererDeps {
   timeZone: string;
 }
 
-// Share of the progress bar per stage.
-const W_LOUDNESS = 0.05;
-const W_SEGMENTS = 0.6;
+/**
+ * Share of the progress bar (and so of the ETA) per stage: loudness, segments; the join gets
+ * the rest. Measured on an Apple M4 with 1080p iPhone clips: per 30 s of footage, segments
+ * take ~7 s, the final x264 encode ~14 s and the x265 one ~30 s.
+ */
+const WEIGHTS: Record<Preset, [number, number]> = {
+  compatible: [0.04, 0.31],
+  original: [0.02, 0.18],
+};
 
-export class Renderer extends EventEmitter<{ change: [] }> {
+/** One line per finished render, for the server log. */
+export interface RenderSummary {
+  state: 'done' | 'cancelled' | 'error';
+  preset: Preset;
+  clips: number;
+  /** Output duration, seconds. */
+  duration: number;
+  /** Wall-clock seconds per stage. */
+  seconds: { loudness: number; segments: number; join: number; total: number };
+}
+
+export class Renderer extends EventEmitter<{ change: []; finished: [RenderSummary] }> {
   state: RenderState = { state: 'idle' };
   private abort: AbortController | null = null;
   private job: Promise<void> | null = null;
@@ -60,6 +77,9 @@ export class Renderer extends EventEmitter<{ change: [] }> {
     const { store } = this.deps;
     const workDir = path.join(store.dir, 'render');
     const started = Date.now();
+    const [W_LOUDNESS, W_SEGMENTS] = WEIGHTS[options.preset];
+    const marks = { loudness: started, segments: started, join: started };
+    let duration = 0;
     let outFile: string | null = null;
     let final: RenderState;
     const report = (progress: number, step: string) => {
@@ -79,6 +99,7 @@ export class Renderer extends EventEmitter<{ change: [] }> {
         if (clip.media!.hasAudio) loudness[clip.id] = await measureLoudness(src, keepRanges(clip.segments), signal);
         report((W_LOUDNESS * (k + 1)) / clips.length, 'Measuring loudness');
       }
+      marks.loudness = marks.segments = marks.join = Date.now();
 
       const plan = buildPlan({
         clips,
@@ -89,6 +110,7 @@ export class Renderer extends EventEmitter<{ change: [] }> {
         timeZone: this.deps.timeZone,
       });
 
+      duration = plan.totalDuration;
       const total = plan.segments.reduce((s, x) => s + x.duration, 0);
       const intermediates: string[] = [];
       let done = 0;
@@ -105,6 +127,7 @@ export class Renderer extends EventEmitter<{ change: [] }> {
         });
         done += seg.duration;
         intermediates.push(out);
+        marks.segments = marks.join = Date.now();
       }
 
       outFile = uniquePath(path.join(this.deps.outputDir, plan.filename));
@@ -114,6 +137,7 @@ export class Renderer extends EventEmitter<{ change: [] }> {
           report(W_LOUDNESS + W_SEGMENTS + (1 - W_LOUDNESS - W_SEGMENTS) * Math.min(1, t / plan.totalDuration), 'Joining clips'),
       });
 
+      marks.join = Date.now();
       store.setLastOutput(path.basename(outFile));
       final = { state: 'done', file: path.basename(outFile) };
     } catch (err) {
@@ -125,6 +149,19 @@ export class Renderer extends EventEmitter<{ change: [] }> {
     await rm(workDir, { recursive: true, force: true });
     this.abort = null;
     this.set(final);
+    const sec = (a: number, b: number) => Math.round((b - a) / 100) / 10;
+    this.emit('finished', {
+      state: final.state as RenderSummary['state'],
+      preset: options.preset,
+      clips: clips.length,
+      duration,
+      seconds: {
+        loudness: sec(started, marks.loudness),
+        segments: sec(marks.loudness, marks.segments),
+        join: sec(marks.segments, marks.join),
+        total: sec(started, Date.now()),
+      },
+    });
   }
 
   private set(state: RenderState): void {

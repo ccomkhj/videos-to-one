@@ -43,6 +43,12 @@ export function tonemapChain(transfer: string | undefined): string {
   ].join(',');
 }
 
+/** Tags the frames themselves: generated frames (title card) carry none, and the encoder follows the frames. */
+const colorParams = (hdr: boolean) =>
+  hdr
+    ? `setparams=color_primaries=bt2020:color_trc=${HLG}:colorspace=bt2020nc`
+    : 'setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709';
+
 const colorFlags = (hdr: boolean) =>
   hdr
     ? ['-color_primaries', 'bt2020', '-color_trc', HLG, '-colorspace', 'bt2020nc']
@@ -181,7 +187,7 @@ export function segmentArgs(seg: PlanSegment, plan: Plan, ctx: SegmentContext): 
   let audio: string;
   if (seg.kind === 'title') {
     inputs = ['-f', 'lavfi', '-i', `color=c=black:s=${W}x${H}:r=${plan.fps}:d=${d}`, ...silence];
-    video = ['[0:v]setsar=1', ...textChain(seg, plan, ctx), `format=${pix}[v]`].join(',');
+    video = ['[0:v]setsar=1', ...textChain(seg, plan, ctx), `format=${pix}`, `${colorParams(plan.hdr)}[v]`].join(',');
     audio = `[1:a]${audioFmt}[a]`;
   } else {
     inputs = ['-ss', n(seg.start), '-t', d, '-i', seg.source, ...(seg.hasAudio ? [] : silence)];
@@ -193,7 +199,8 @@ export function segmentArgs(seg: PlanSegment, plan: Plan, ctx: SegmentContext): 
       'tpad=stop_mode=clone:stop_duration=1',
       fillChain(plan),
       ...textChain(seg, plan, ctx),
-      `format=${pix}[v]`,
+      `format=${pix}`,
+      `${colorParams(plan.hdr)}[v]`,
     ].join(',');
     const gain = seg.gainDb !== 0 ? `,volume=${n(seg.gainDb)}dB` : '';
     audio = seg.hasAudio ? `[0:a]asetpts=PTS-STARTPTS,${audioFmt}${gain},apad[a]` : `[1:a]${audioFmt}[a]`;

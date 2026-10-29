@@ -15,7 +15,7 @@ const geocoder =
         userAgent: `videos-to-one/${config.version} (+https://github.com/ccomkhj/videos-to-one)`,
       });
 
-const { server } = await buildApp(config, {
+const { server, renderer } = await buildApp(config, {
   geocoder,
   tzAt: ({ lat, lon }) => {
     try {
@@ -24,6 +24,14 @@ const { server } = await buildApp(config, {
       return undefined;
     }
   },
+});
+
+renderer.on('finished', (r) => {
+  const t = r.seconds;
+  console.log(
+    `Render ${r.state}: ${r.clips} clips, ${Math.round(r.duration)} s, ${r.preset} preset, ` +
+      `${t.total} s total (loudness ${t.loudness} s, clips ${t.segments} s, join ${t.join} s)`,
+  );
 });
 
 await server.listen({ port: config.port, host: '0.0.0.0' });
