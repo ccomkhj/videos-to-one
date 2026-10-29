@@ -1,6 +1,6 @@
 # videos-to-one — Product & Technical Spec (v1)
 
-> Status: **draft for review** — no code yet.
+> Status: **agreed** — ready to start M0 (iOS upload spike). No code yet.
 > Scope agreed in a Q&A session on 2026-10-29; the decision log is at the end.
 
 ## 1. Goal
@@ -171,7 +171,7 @@ were UTC. This can't be detected reliably, so v1 accepts it and documents it.
   and nearby clips don't trigger new lookups.
 - Label: `<locality>, <country>`, where locality is the first available of city → town →
   village → municipality → county → state. Example: "Kyoto, Japan".
-- Language: English by default (`accept-language=en`). See open question Q1.
+- Language: English (`accept-language=en`), changeable via `PLACE_LANGUAGE`.
 - If there is no network or the lookup fails, the place is left out. A clip can't fail
   because of the lookup.
 - `GEOCODER=off` disables the lookup entirely, for fully offline use.
@@ -182,9 +182,10 @@ were UTC. This can't be detected reliably, so v1 accepts it and documents it.
   with blur fill or bars. The margin is about 4% of the canvas's short side.
 - Style: **white text with a subtle drop shadow**, two lines:
   - line 1: place (slightly larger)
-  - line 2: date, e.g. `29 Oct 2026` (date only; see Q3)
+  - line 2: date, formatted `29 Oct 2026` (date only)
 - Missing fields are omitted: no GPS shows the date only, no date shows the place
   only, and with neither there is no overlay.
+- Always on: there is no switch to disable it.
 - Timing: shown on the **first kept segment of each clip**, for 4 s (or the segment length
   if shorter), with a 0.3 s fade in and a 0.5 s fade out. It is not repeated after a
   middle cut.
@@ -234,13 +235,13 @@ to 24/25/30/50/60 and capped at 60.
 | | Compatible 1080p (default) | Original quality |
 |---|---|---|
 | Video | H.264 High, 8-bit, BT.709 SDR, CRF ~20 | HEVC (`hvc1` tag), 10-bit, CRF ~20 |
-| HDR inputs | tone-mapped to SDR | **kept as HDR (HLG)** if every clip is HDR; otherwise all are tone-mapped to SDR (Q7) |
+| HDR inputs | tone-mapped to SDR | **kept as HDR (HLG)** if every clip is HDR; otherwise all are tone-mapped to SDR |
 | Audio | AAC 192 kb/s, 48 kHz stereo | AAC 256 kb/s, 48 kHz stereo |
 | Container | MP4, `+faststart` | MP4, `+faststart` |
 
 **Crossfades:** 0.5 s `xfade` (fade) and `acrossfade` between consecutive segments,
 including between the title card and the first clip. Each crossfade shortens the total
-duration by 0.5 s. Whether middle cuts within a clip also crossfade is open question Q4.
+duration by 0.5 s. Middle cuts within a clip use the same crossfade.
 
 **Loudness:** each clip is measured over its kept parts, and one linear gain is applied
 to all of its segments. Target −16 LUFS integrated, −1.5 dBTP. Removing a middle
@@ -384,16 +385,16 @@ All configuration is through environment variables. There is no settings UI.
 | M3 | UI | Clips screen, uploads, drag reorder, clip editor, export sheet, download, laptop drop zone, and QR card all work. |
 | M4 | Packaging | Dockerfile with ffmpeg and fonts, published image, and a README with run commands for macOS, Linux, and Windows. |
 
-## 11. Open questions (with proposed defaults)
+## 11. Resolved details (defaults accepted 2026-10-29)
 
-| # | Question | Proposed default |
+| # | Question | Decision |
 |---|---|---|
-| Q1 | Language of place names: English or the local language (e.g. 京都市 vs Kyoto)? | English; changeable via `PLACE_LANGUAGE` |
+| Q1 | Language of place names: English or the local language (e.g. 京都市 vs Kyoto)? | English, changeable via `PLACE_LANGUAGE` |
 | Q2 | How precise the place should be: city or neighbourhood / landmark? | `City, Country` |
 | Q3 | Date format? | `29 Oct 2026` |
 | Q4 | Middle cuts within a clip: crossfade (like between clips) or hard cut? | Crossfade, for consistency |
 | Q5 | Title card background: black or a blurred first frame? Show the date range under the title? | Black; yes, show the date range |
-| Q6 | Overlay on/off switch at export, or always on? | Always on, as decided; add a switch only if needed |
+| Q6 | Overlay on/off switch at export, or always on? | Always on |
 | Q7 | Original quality with all-HDR inputs: keep HDR, or always SDR for simplicity? | Keep HLG HDR when every clip is HDR |
 | Q8 | Output filename scheme? | `<title or date range>_<YYYYMMDD-HHMM>.mp4` |
 
