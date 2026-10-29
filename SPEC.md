@@ -327,7 +327,11 @@ and filmstrip. The clip is marked ready when this finishes.
    resamples the audio and applies the clip's gain (or adds silence).
 3. **Title card**, if a title was entered, is rendered the same way.
 4. **Assemble.** Chain `xfade` and `acrossfade` across the intermediates, encode with the
-   chosen preset, and write the MP4 with `+faststart`.
+   chosen preset, and write the MP4 with `+faststart`. This final encode uses a hardware
+   encoder when the OS has one that passes a test encode at startup: VideoToolbox on
+   macOS, NVENC (NVIDIA) or VAAPI (Intel/AMD, `/dev/dri`) on Linux. Otherwise, and if
+   the hardware encode fails on the real job, it uses software x264/x265. Intermediates
+   are always software x264, so the overlay and fill look the same everywhere.
 5. **Clean up** the intermediates and emit the final event with the download link.
 
 Rendering each segment separately gives meaningful progress, keeps each ffmpeg call
@@ -346,13 +350,15 @@ All configuration is through environment variables. There is no settings UI.
 | `TZ` | `UTC` | Fallback timezone (§5.2) |
 | `GEOCODER` | `nominatim` | `nominatim` or `off` |
 | `PLACE_LANGUAGE` | `en` | Language for place names |
+| `ENCODER` | `auto` | Final encoder: `auto`, `software`, `videotoolbox`, `nvenc` or `vaapi` (§6.4 step 4) |
+| `VAAPI_DEVICE` | `/dev/dri/renderD128` | VAAPI render node |
 
 ## 8. Risks and spikes
 
 | # | Risk | Mitigation |
 |---|---|---|
 | **R1** | **iOS Safari's photo picker may re-encode videos and/or strip GPS and the original creation date.** This would break the main feature for the main use case. | **Spike first (M0)**: upload test clips from a real iPhone via Safari, through the Photos picker and through "Choose File" → Files, and record which tags survive and whether the codec changed. **Agreed fallback: the laptop drop zone.** AirDrop the clips to the computer, then drag them in, which keeps the original files and metadata. When a phone upload lacks location or the original date, the clip row shows a hint pointing to this. |
-| R2 | Software-only encoding in Docker (no VideoToolbox/GPU on Docker Desktop for Mac): 4K HEVC exports can take several times the video's length. | Compatible 1080p is the default. Show an ETA. Keep the 4K preset clearly labelled as slow. |
+| R2 | Software-only encoding in Docker (no VideoToolbox/GPU on Docker Desktop for Mac): 4K HEVC exports can take several times the video's length. | Compatible 1080p is the default. Show an ETA. Keep the 4K preset clearly labelled as slow. Use a hardware encoder for the final encode when one works (§6.4 step 4): run natively on macOS for VideoToolbox, or pass the GPU into Docker on Linux. Measured on an M4 with 17 min of 1080p iPhone clips, Original quality: 29 min with x265, 7 min with VideoToolbox (file ~25% larger). |
 | R3 | HDR edge cases: Dolby Vision metadata is dropped, tone-mapping can look flat, and HDR and SDR clips get mixed. | Use the HLG base layer, apply a single well-tested tone-map chain (zscale + tonemap), and include HDR iPhone fixtures in tests. |
 | R4 | Nominatim is unavailable or rate-limited. | 1 req/s queue, on-disk cache, and graceful omission of the place. |
 | R5 | iOS pauses uploads when the screen locks or Safari goes to the background. | Per-file retry and a tip to keep the screen on during upload. Clips that already uploaded are kept. |

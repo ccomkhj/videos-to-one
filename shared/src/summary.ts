@@ -30,6 +30,23 @@ export function defaultAspect(clips: readonly Clip[]): Aspect {
   return ASPECT_FOR[best];
 }
 
+/** Transfer characteristic of HLG HDR, the only HDR kept in the output (SPEC §5.7). */
+export const HLG = 'arib-std-b67';
+
+/**
+ * What Original quality adds over Compatible 1080p for these clips: a canvas above 1080p,
+ * and/or HLG HDR kept. Mirrors the planner's canvas and HDR rules.
+ */
+export function originalGains(clips: readonly Clip[], aspect: Aspect): { resolution: boolean; hdr: boolean } {
+  const media = clips.flatMap((c) => (c.media ? [c.media] : []));
+  const long = Math.max(0, ...media.map((m) => Math.max(m.width, m.height)));
+  const short = Math.max(0, ...media.map((m) => Math.min(m.width, m.height)));
+  return {
+    resolution: aspect === '1:1' ? short > 1080 : long > 1920,
+    hdr: media.length > 0 && media.every((m) => m.colorTransfer === HLG),
+  };
+}
+
 function resolutionLabel(c: Clip): string {
   const short = Math.min(c.media?.width ?? 0, c.media?.height ?? 0);
   if (short >= 2160) return '4K';

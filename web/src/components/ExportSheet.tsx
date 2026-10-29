@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { defaultAspect, inputSummary, type Aspect, type Fill, type Preset, type SessionSnapshot } from '@vto/shared';
+import { defaultAspect, inputSummary, originalGains, type Aspect, type Fill, type Preset, type SessionSnapshot } from '@vto/shared';
 import { api } from '../api.ts';
 
 /** Export options, render progress and download (SPEC §4.3). */
@@ -13,6 +13,7 @@ export function ExportSheet({ session, onClose }: { session: SessionSnapshot; on
   const [again, setAgain] = useState(false);
   const render = session.render;
   const pending = session.clips.length - ready.length;
+  const gains = originalGains(ready, aspect);
 
   const start = async () => {
     setError(null);
@@ -91,6 +92,12 @@ export function ExportSheet({ session, onClose }: { session: SessionSnapshot; on
                 ['original', 'Original quality (slow)'],
               ]}
             />
+            {preset === 'original' && ready.length > 0 && !gains.resolution && !gains.hdr && (
+              <p className="muted small">
+                For these clips, Original quality looks the same as Compatible: 1080p, not HDR. Only the file is
+                smaller (HEVC), and some older devices can't play it.
+              </p>
+            )}
             <label className="field">
               <span>Title (optional)</span>
               <input value={title} maxLength={120} placeholder="No title card" onChange={(e) => setTitle(e.target.value)} />

@@ -5,6 +5,7 @@
  */
 import {
   formatDate,
+  HLG,
   formatDateRange,
   keepRanges,
   snapFps,
@@ -20,7 +21,7 @@ export const OVERLAY_SECONDS = 4;
 export const TITLE_SECONDS = 3;
 const TARGET_LUFS = -16;
 const TARGET_TP = -1.5;
-export const HLG = 'arib-std-b67';
+export { HLG };
 
 export interface Loudness {
   /** Integrated loudness, LUFS (-Infinity for silence). */

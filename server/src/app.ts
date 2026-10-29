@@ -18,6 +18,7 @@ import {
   type SessionSnapshot,
 } from '@vto/shared';
 import type { Config } from './config.ts';
+import type { Encoders } from './encoders.ts';
 import type { Geocoder } from './geocode.ts';
 import { Ingest, originalPath } from './ingest.ts';
 import { Renderer } from './render.ts';
@@ -26,6 +27,8 @@ import { SessionStore } from './session.ts';
 export interface AppDeps {
   geocoder: Geocoder;
   tzAt: (loc: LatLon) => string | undefined;
+  /** Final-encode backends from `detectEncoders`; software if omitted. */
+  encoders?: Encoders;
 }
 
 export interface App {
@@ -47,7 +50,13 @@ export async function buildApp(config: Config, deps: AppDeps): Promise<App> {
   await mkdir(sessionDir, { recursive: true });
 
   const ingest = new Ingest({ store, geocoder: deps.geocoder, tzAt: deps.tzAt, timeZone: config.timeZone });
-  const renderer = new Renderer({ store, outputDir, fonts: config.fonts, timeZone: config.timeZone });
+  const renderer = new Renderer({
+    store,
+    outputDir,
+    fonts: config.fonts,
+    timeZone: config.timeZone,
+    ...(deps.encoders ? { encoders: deps.encoders } : {}),
+  });
 
   // Clips interrupted by a restart are analyzed again.
   for (const clip of store.ordered()) if (clip.status === 'analyzing') ingest.enqueue(clip.id);

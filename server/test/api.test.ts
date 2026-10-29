@@ -10,7 +10,19 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Clip, SessionSnapshot } from '@vto/shared';
 import { buildApp, type App } from '../src/app.ts';
 import { loadConfig } from '../src/config.ts';
+import { candidates, detectEncoders, SOFTWARE } from '../src/encoders.ts';
+import { encoderProbeArgs } from '../src/ffmpeg-args.ts';
+import { run } from '../src/ffmpeg.ts';
+import type { RenderSummary } from '../src/render.ts';
 import { ffprobeJson, makeClips, type SynthClip } from './helpers/synth.ts';
+
+// The hardware encoder this machine has (VideoToolbox on a Mac), if any.
+const hardware = await detectEncoders(candidates(process.platform, 'auto', '/dev/dri/renderD128'), (enc, preset) =>
+  run('ffmpeg', encoderProbeArgs(enc, preset)).then(
+    () => true,
+    () => false,
+  ),
+);
 
 let root: string;
 let app: App;
@@ -209,6 +221,31 @@ describe('export', () => {
     expect(v).toMatchObject({ codec_name: 'hevc', codec_tag_string: 'hvc1', width: 1080, height: 1920, pix_fmt: 'yuv420p10le' });
     // kyoto 3 + paris (1.5 + 1.5) + rotated 3, minus 3 crossfades
     expect(Number(probe.format.duration)).toBeCloseTo(7.5, 1);
+  });
+
+  it.runIf(hardware.compatible.kind !== 'software')('renders with the hardware encoder when the OS has one', async () => {
+    app.renderer.encoders = hardware;
+    const finished = new Promise<RenderSummary>((resolve) => app.renderer.once('finished', resolve));
+    await fetch(`${base}/api/export`, json('POST', { aspect: '16:9', fill: 'blur', preset: 'compatible', title: 'HW' }));
+    await app.renderer.settled();
+    app.renderer.encoders = SOFTWARE;
+    expect((await session()).render).toMatchObject({ state: 'done' });
+    expect((await finished).encoder).toBe(hardware.compatible.kind);
+    const probe = ffprobeJson(path.join(root, 'data', 'output', (await session()).lastOutput!));
+    const v = probe.streams.find((x: any) => x.codec_type === 'video');
+    expect(v).toMatchObject({ codec_name: 'h264', width: 1920, height: 1080, color_transfer: 'bt709' });
+  });
+
+  it('falls back to software when the hardware encoder fails on the real job', async () => {
+    app.renderer.encoders = { compatible: { kind: 'vaapi', device: '/nonexistent' }, original: { kind: 'software' } };
+    const finished = new Promise<RenderSummary>((resolve) => app.renderer.once('finished', resolve));
+    await fetch(`${base}/api/export`, json('POST', { aspect: '16:9', fill: 'bars', preset: 'compatible', title: '' }));
+    await app.renderer.settled();
+    app.renderer.encoders = SOFTWARE;
+    expect((await session()).render).toMatchObject({ state: 'done' });
+    expect((await finished).encoder).toMatch(/^software \(vaapi \(\/nonexistent\) failed: /);
+    const probe = ffprobeJson(path.join(root, 'data', 'output', (await session()).lastOutput!));
+    expect(probe.streams.find((x: any) => x.codec_type === 'video')).toMatchObject({ codec_name: 'h264' });
   });
 
   it('cancels a running render and leaves no partial output', async () => {

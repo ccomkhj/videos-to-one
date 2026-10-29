@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assembleArgs, loudnessArgs, proxyArgs, segmentArgs, stripArgs } from '../src/ffmpeg-args.ts';
+import { assembleArgs, encoderProbeArgs, loudnessArgs, proxyArgs, segmentArgs, stripArgs } from '../src/ffmpeg-args.ts';
 import type { ClipSegment, Plan, TitleSegment } from '../src/plan.ts';
 
 const fonts = { latin: '/fonts/NotoSans-Regular.ttf', cjk: '/fonts/NotoSansCJK-Regular.ttc' };
@@ -89,11 +89,39 @@ describe('assembleArgs', () => {
     expect(assembleArgs(['/r/0.mkv', '/r/1.mkv', '/r/2.mkv'], plan, '/out/x.mp4')).toMatchSnapshot();
   });
 
-  it('copies a single segment without a filter graph and encodes HDR HEVC for the original preset', () => {
+  it('encodes a single segment as HDR HEVC for the original preset, tagging the frames', () => {
     const args = assembleArgs(['/r/0.mkv'], basePlan({ hdr: true, preset: 'original' }), '/out/x.mp4');
-    expect(args).not.toContain('-filter_complex');
-    expect(args).toEqual(expect.arrayContaining(['libx265', 'hvc1', 'yuv420p10le', '256k', '+faststart']));
+    expect(args).not.toContain('xfade');
+    expect(args).toEqual(expect.arrayContaining(['libx265', 'hvc1', 'yuv420p10le', '256k', '+faststart', '0:a']));
     expect(args.join(' ')).toContain('transfer=arib-std-b67');
+    expect(args.join(' ')).toContain('[0:v]format=yuv420p10le,setparams=color_primaries=bt2020:color_trc=arib-std-b67:colorspace=bt2020nc[vout]');
+  });
+
+  it.each([
+    ['videotoolbox', 'compatible'],
+    ['videotoolbox', 'original'],
+    ['nvenc', 'compatible'],
+    ['nvenc', 'original'],
+    ['vaapi', 'compatible'],
+    ['vaapi', 'original'],
+  ] as const)('encodes with %s for the %s preset', (kind, preset) => {
+    const plan = basePlan({ offsets: [5.5], preset });
+    const enc = kind === 'vaapi' ? { kind, device: '/dev/dri/renderD128' } : { kind };
+    expect(assembleArgs(['/r/0.mkv', '/r/1.mkv'], plan, '/out/x.mp4', enc)).toMatchSnapshot();
+  });
+});
+
+describe('encoderProbeArgs', () => {
+  it('test-encodes a generated picture through the same tail and codec options', () => {
+    expect(encoderProbeArgs({ kind: 'vaapi', device: '/dev/dri/renderD129' }, 'original')).toEqual([
+      '-hide_banner', '-nostdin', '-y', '-loglevel', 'error',
+      '-vaapi_device', '/dev/dri/renderD129',
+      '-f', 'lavfi', '-i', 'testsrc2=s=1280x720:r=30:d=0.5',
+      '-filter_complex', '[0:v]format=p010,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,hwupload[v]',
+      '-map', '[v]',
+      '-c:v', 'hevc_vaapi', '-qp', '22', '-profile:v', 'main10', '-tag:v', 'hvc1',
+      '-f', 'null', '-',
+    ]);
   });
 });
 

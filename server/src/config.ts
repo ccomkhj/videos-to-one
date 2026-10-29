@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ENCODER_SETTINGS, type EncoderSetting } from './encoders.ts';
 import type { Fonts } from './ffmpeg-args.ts';
 
 export interface Config {
@@ -10,6 +11,9 @@ export interface Config {
   timeZone: string;
   geocoder: 'nominatim' | 'off';
   placeLanguage: string;
+  /** Final encoder: auto (hardware if it works, per OS) or a forced backend. */
+  encoder: EncoderSetting;
+  vaapiDevice: string;
   fonts: Fonts;
   webDist: string | null;
   version: string;
@@ -27,6 +31,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     timeZone: env.TZ?.trim() || 'UTC',
     geocoder: env.GEOCODER === 'off' ? 'off' : 'nominatim',
     placeLanguage: env.PLACE_LANGUAGE?.trim() || 'en',
+    encoder: ENCODER_SETTINGS.find((e) => e === env.ENCODER?.trim().toLowerCase()) ?? 'auto',
+    vaapiDevice: env.VAAPI_DEVICE?.trim() || '/dev/dri/renderD128',
     fonts: resolveFonts(env),
     webDist: existsSync(path.join(webDist, 'index.html')) ? webDist : null,
     version: env.APP_VERSION ?? '0.1.0',

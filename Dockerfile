@@ -15,8 +15,12 @@ RUN npm run build && npm prune --omit=dev
 
 FROM node:22-bookworm-slim
 # Debian's ffmpeg has libx264, libx265, libfreetype (drawtext) and libzimg (zscale).
+# VA drivers are for VAAPI with `--device /dev/dri` (Intel/AMD); whether a GPU encoder
+# is usable is decided by a test encode at startup, with software as the fallback.
+ARG TARGETARCH
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg fonts-noto-core fonts-noto-cjk tzdata \
+ && apt-get install -y --no-install-recommends ffmpeg fonts-noto-core fonts-noto-cjk tzdata mesa-va-drivers \
+    $([ "$TARGETARCH" = amd64 ] && echo intel-media-va-driver) \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production \
