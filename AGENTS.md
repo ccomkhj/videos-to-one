@@ -1,0 +1,2 @@
+- Do not add Co-Author in commit
+- Keep DRY, KISS principle (Simple wins.)
