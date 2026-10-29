@@ -8,6 +8,7 @@
     "dev": "npm run dev -w server & npm run dev -w web",
     "build": "npm run build -w web",
     "start": "npm run start -w server",
+    "models": "npm run models -w server",
     "typecheck": "tsc -p shared --noEmit && tsc -p server --noEmit && tsc -p web --noEmit",
     "test": "vitest run"
   },

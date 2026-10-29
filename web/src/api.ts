@@ -1,4 +1,4 @@
-import type { AppInfo, Clip, ExportOptions, Segment, SessionSnapshot } from '@vto/shared';
+import type { AppInfo, Clip, ExportOptions, Rotation, Segment, SessionSnapshot } from '@vto/shared';
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -15,6 +15,8 @@ export const api = {
   session: () => call<SessionSnapshot>('GET', '/api/session'),
   deleteClip: (id: string) => call<SessionSnapshot>('DELETE', `/api/clips/${id}`),
   saveSegments: (id: string, segments: Segment[]) => call<Clip>('PATCH', `/api/clips/${id}`, { segments }),
+  setRotate: (id: string, rotate: Rotation) => call<Clip>('PATCH', `/api/clips/${id}`, { rotate }),
+  dismissSuggestion: (id: string) => call<Clip>('PATCH', `/api/clips/${id}`, { dismissSuggestion: true }),
   setOrder: (ids: string[]) => call<SessionSnapshot>('PUT', '/api/order', { ids }),
   sortByDate: () => call<SessionSnapshot>('PUT', '/api/order', { sort: 'date' }),
   reset: () => call<SessionSnapshot>('POST', '/api/session/reset'),
@@ -23,7 +25,7 @@ export const api = {
 };
 
 export const proxyUrl = (id: string) => `/api/clips/${id}/proxy.mp4`;
-export const stripUrl = (id: string) => `/api/clips/${id}/strip.jpg`;
+export const stripUrl = (id: string, rev?: number) => `/api/clips/${id}/strip.jpg${rev ? `?r=${rev}` : ''}`;
 
 /** Upload one file with progress (fetch has no upload progress). */
 export function uploadFile(file: File, onProgress: (fraction: number) => void): { promise: Promise<void>; abort: () => void } {

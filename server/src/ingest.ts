@@ -1,5 +1,6 @@
 /** Upload processing (SPEC §6.4 "On upload"): probe → metadata → place → proxy → filmstrip. */
 import { initialSegments, type LatLon } from '@vto/shared';
+import { rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { proxyArgs, stripArgs } from './ffmpeg-args.ts';
 import { probe, run } from './ffmpeg.ts';
@@ -17,12 +18,16 @@ export interface IngestDeps {
   geocoder: Geocoder;
   tzAt: (loc: LatLon) => string | undefined;
   timeZone: string;
+  /** Called once a clip turns ready (orientation detection hooks in here). */
+  onReady?: (id: string) => void;
 }
 
 export class Ingest {
   private queue: string[] = [];
   private active = 0;
   private idleWaiters: Array<() => void> = [];
+  /** Per-clip filmstrip regeneration, serialized so the last rotation wins. */
+  private strips = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: IngestDeps, private readonly concurrency = 2) {}
 
@@ -35,6 +40,33 @@ export class Ingest {
   idle(): Promise<void> {
     if (this.active === 0 && this.queue.length === 0) return Promise.resolve();
     return new Promise((r) => this.idleWaiters.push(r));
+  }
+
+  /** Regenerates the filmstrip after a manual rotation, in the background (SPEC §6.4). */
+  restrip(id: string): Promise<void> {
+    const prev = this.strips.get(id) ?? Promise.resolve();
+    const next = prev.then(() => this.writeStrip(id)).catch(() => {});
+    this.strips.set(id, next);
+    void next.finally(() => {
+      if (this.strips.get(id) === next) this.strips.delete(id);
+    });
+    return next;
+  }
+
+  private async writeStrip(id: string): Promise<void> {
+    const { store } = this.deps;
+    const clip = store.get(id);
+    if (!clip?.media || clip.status !== 'ready') return;
+    const dir = store.clipDir(id);
+    const tmp = path.join(dir, 'strip.tmp.jpg');
+    try {
+      await run('ffmpeg', stripArgs(path.join(dir, 'proxy.mp4'), clip.media.duration, tmp, clip.rotate));
+      await rename(tmp, path.join(dir, 'strip.jpg'));
+    } catch {
+      await rm(tmp, { force: true });
+      return;
+    }
+    if (store.get(id)) store.update(id, { stripRev: (store.get(id)!.stripRev ?? 0) + 1 });
   }
 
   private pump(): void {
@@ -73,9 +105,13 @@ export class Ingest {
       const place = parsed.location ? this.deps.geocoder.placeAt(parsed.location) : Promise.resolve(undefined);
       const proxy = path.join(dir, 'proxy.mp4');
       await run('ffmpeg', proxyArgs(original, parsed.media, proxy));
-      await run('ffmpeg', stripArgs(proxy, parsed.media.duration, path.join(dir, 'strip.jpg')));
+      // A rotation chosen while the proxy was being made is already in the filmstrip.
+      await run('ffmpeg', stripArgs(proxy, parsed.media.duration, path.join(dir, 'strip.jpg'), store.get(id)?.rotate));
       const label = await place;
-      if (store.get(id)) store.update(id, { ...(label ? { place: label } : {}), status: 'ready' });
+      if (store.get(id)) {
+        store.update(id, { ...(label ? { place: label } : {}), status: 'ready' });
+        this.deps.onReady?.(id);
+      }
     } catch (err) {
       if (store.get(id)) store.update(id, { status: 'error', error: friendlyError(err) });
     }

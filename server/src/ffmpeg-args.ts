@@ -2,7 +2,7 @@
  * Argument builders for every ffmpeg call (SPEC §6.4). Pure, so the generated
  * filter graphs can be snapshot-tested; `ffmpeg.ts` runs them.
  */
-import type { KeepRange, MediaInfo, Preset } from '@vto/shared';
+import type { KeepRange, MediaInfo, Preset, Rotation } from '@vto/shared';
 import type { Encoder } from './encoders.ts';
 import { CROSSFADE, HLG, type Plan, type PlanSegment } from './plan.ts';
 
@@ -55,6 +55,20 @@ const colorFlags = (hdr: boolean) =>
     ? ['-color_primaries', 'bt2020', '-color_trc', HLG, '-colorspace', 'bt2020nc']
     : ['-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709'];
 
+/** The manual clockwise rotation as a filter, or null for none. */
+export function rotateFilter(r: Rotation | undefined): string | null {
+  switch (r) {
+    case 90:
+      return 'transpose=clock';
+    case 180:
+      return 'hflip,vflip';
+    case 270:
+      return 'transpose=cclock';
+    default:
+      return null;
+  }
+}
+
 /** 720p SDR H.264 with a 1 s GOP for fast seeking in the editor. */
 export function proxyArgs(src: string, media: Pick<MediaInfo, 'width' | 'height' | 'hdr' | 'colorTransfer'>, out: string): string[] {
   const scale = media.width >= media.height ? "scale=-2:'min(720,ih)'" : "scale='min(720,iw)':-2";
@@ -73,11 +87,12 @@ export function proxyArgs(src: string, media: Pick<MediaInfo, 'width' | 'height'
 }
 
 /** Ten thumbnails side by side, read from the (already SDR) proxy. */
-export function stripArgs(proxy: string, duration: number, out: string): string[] {
+export function stripArgs(proxy: string, duration: number, out: string, rotate?: Rotation): string[] {
+  const vf = [rotateFilter(rotate), `fps=${n(10 / Math.max(duration, 0.1))},scale=-2:120,tile=10x1`].filter(Boolean).join(',');
   return [
     ...BASE,
     '-i', proxy,
-    '-vf', `fps=${n(10 / Math.max(duration, 0.1))},scale=-2:120,tile=10x1`,
+    '-vf', vf,
     '-frames:v', '1', '-q:v', '4',
     out,
   ];
@@ -195,6 +210,7 @@ export function segmentArgs(seg: PlanSegment, plan: Plan, ctx: SegmentContext): 
     const tonemap = seg.hdr && !plan.hdr ? [tonemapChain(seg.colorTransfer)] : [];
     video = [
       '[0:v]setpts=PTS-STARTPTS',
+      ...(seg.rotate ? [rotateFilter(seg.rotate)!] : []),
       ...tonemap,
       `fps=${plan.fps}`,
       'tpad=stop_mode=clone:stop_duration=1',

@@ -90,6 +90,8 @@ Stop the container when you're done, and be careful on hotel or café Wi-Fi.
 | `PLACE_LANGUAGE` | `en` | Language for place names |
 | `ENCODER` | `auto` | Final encoder: `auto`, `software`, `videotoolbox`, `nvenc` or `vaapi` |
 | `VAAPI_DEVICE` | `/dev/dri/renderD128` | VAAPI render node |
+| `ORIENTATION` | `on` | `off` turns off "looks sideways" suggestions (manual rotate still works) |
+| `MODELS_DIR` | `<repo>/models` | Where `npm run models` puts the detection models |
 
 Known quirk: some Android phones write local time into `creation_time` as if it were UTC.
 This can't be detected reliably, so those clips may show a date that is off around midnight.
@@ -100,10 +102,12 @@ Requires Node 22+ and ffmpeg/ffprobe (with libx264, libx265, libfreetype, libzim
 On macOS, Homebrew's `ffmpeg` lacks libfreetype (renders fail with "No such filter:
 'drawtext'"); use `brew install ffmpeg-full` and put `/opt/homebrew/opt/ffmpeg-full/bin`
 first on `PATH`. There are no Linux font paths on macOS either, so also set e.g.
-`FONT_LATIN=/System/Library/Fonts/Supplemental/Arial.ttf`.
+`FONT_LATIN=/System/Library/Fonts/Supplemental/Arial.ttf`. Korean/Japanese/Chinese text uses
+macOS's Arial Unicode automatically (override with `FONT_CJK`).
 
 ```bash
 npm install
+npm run models      # sideways-clip detection models (~82 MB, into models/); optional
 npm test            # unit + snapshot + end-to-end tests (real ffmpeg, synthetic clips)
 npm run typecheck
 DATA_DIR=.data npm run dev   # API on :8080, Vite dev server on :5173 (proxies /api)
