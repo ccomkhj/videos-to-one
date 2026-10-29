@@ -10,7 +10,19 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Clip, SessionSnapshot } from '@vto/shared';
 import { buildApp, type App } from '../src/app.ts';
 import { loadConfig } from '../src/config.ts';
+import { candidates, detectEncoders, SOFTWARE } from '../src/encoders.ts';
+import { encoderProbeArgs } from '../src/ffmpeg-args.ts';
+import { run } from '../src/ffmpeg.ts';
+import type { RenderSummary } from '../src/render.ts';
 import { ffprobeJson, makeClips, type SynthClip } from './helpers/synth.ts';
+
+// The hardware encoder this machine has (VideoToolbox on a Mac), if any.
+const hardware = await detectEncoders(candidates(process.platform, 'auto', '/dev/dri/renderD128'), (enc, preset) =>
+  run('ffmpeg', encoderProbeArgs(enc, preset)).then(
+    () => true,
+    () => false,
+  ),
+);
 
 let root: string;
 let app: App;
@@ -37,7 +49,7 @@ const json = (method: string, body: unknown) => ({
 beforeAll(async () => {
   root = mkdtempSync(path.join(tmpdir(), 'vto-'));
   clips = makeClips(mkdtempSync(path.join(root, 'src-')));
-  const config = loadConfig({ DATA_DIR: path.join(root, 'data'), TZ: 'Europe/Berlin', PUBLIC_HOST: '192.168.1.23', PORT: '8080', WEB_DIST: '/nonexistent' });
+  const config = loadConfig({ DATA_DIR: path.join(root, 'data'), TZ: 'Europe/Berlin', PUBLIC_HOST: '192.168.1.23', PORT: '8080', WEB_DIST: '/nonexistent', ORIENTATION: 'off' });
   app = await buildApp(config, {
     geocoder: {
       placeAt: async (loc) => {
@@ -131,6 +143,39 @@ describe('editing and ordering', () => {
     expect(bad.status).toBe(400);
   });
 
+  it('stores a manual rotation, rejects invalid ones, and regenerates the filmstrip', async () => {
+    const paris = (await session()).clips[1]!;
+    const stripWidth = async () => {
+      const { stdout } = await run('ffprobe', ['-v', 'error', '-show_entries', 'stream=width', '-of', 'csv=p=0', path.join(app.store.clipDir(paris.id), 'strip.jpg')]);
+      return Number(stdout.trim());
+    };
+    const before = await stripWidth();
+
+    const bad = await fetch(`${base}/api/clips/${paris.id}`, json('PATCH', { rotate: 45 }));
+    expect(bad.status).toBe(400);
+
+    const ok = await fetch(`${base}/api/clips/${paris.id}`, json('PATCH', { rotate: 90 }));
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as Clip).rotate).toBe(90);
+    await app.ingest.restrip(paris.id);
+    const turned = app.store.get(paris.id)!;
+    expect(turned.stripRev).toBeGreaterThanOrEqual(1);
+    expect(turned.segments).toHaveLength(3); // cuts are untouched
+    expect(await stripWidth()).toBeLessThan(before);
+
+    await fetch(`${base}/api/clips/${paris.id}`, json('PATCH', { rotate: 0 }));
+    await app.ingest.restrip(paris.id);
+    expect(await stripWidth()).toBe(before);
+  });
+
+  it('dismisses an orientation suggestion', async () => {
+    const paris = (await session()).clips[1]!;
+    app.store.update(paris.id, { orientation: { suggested: 90, source: 'model', confidence: 0.9 } });
+    const res = await fetch(`${base}/api/clips/${paris.id}`, json('PATCH', { dismissSuggestion: true }));
+    expect(((await res.json()) as Clip).orientation).toEqual({ suggested: 90, source: 'model', confidence: 0.9, dismissed: true });
+    expect((await fetch(`${base}/api/clips/${paris.id}`, json('PATCH', {}))).status).toBe(400);
+  });
+
   it('keeps a manual order, appends new uploads after it, and re-sorts by date', async () => {
     const ids = (await session()).clips.map((c) => c.id);
     const reversed = [...ids].reverse();
@@ -189,6 +234,8 @@ describe('export', () => {
     const v = probe.streams.find((x: any) => x.codec_type === 'video');
     const a = probe.streams.find((x: any) => x.codec_type === 'audio');
     expect(v).toMatchObject({ codec_name: 'h264', width: 1920, height: 1080, pix_fmt: 'yuv420p', avg_frame_rate: '60/1' });
+    // The title card comes first; its color tags must not be lost (it's generated, not decoded).
+    expect(v).toMatchObject({ color_primaries: 'bt709', color_transfer: 'bt709', color_space: 'bt709' });
     expect(a).toMatchObject({ codec_name: 'aac', sample_rate: '48000', channels: 2 });
     // title 3 + kyoto 3 + paris (1.5 + 1.5) + rotated 3, minus 4 crossfades of 0.5 s
     expect(Number(probe.format.duration)).toBeCloseTo(10, 1);
@@ -207,6 +254,31 @@ describe('export', () => {
     expect(v).toMatchObject({ codec_name: 'hevc', codec_tag_string: 'hvc1', width: 1080, height: 1920, pix_fmt: 'yuv420p10le' });
     // kyoto 3 + paris (1.5 + 1.5) + rotated 3, minus 3 crossfades
     expect(Number(probe.format.duration)).toBeCloseTo(7.5, 1);
+  });
+
+  it.runIf(hardware.compatible.kind !== 'software')('renders with the hardware encoder when the OS has one', async () => {
+    app.renderer.encoders = hardware;
+    const finished = new Promise<RenderSummary>((resolve) => app.renderer.once('finished', resolve));
+    await fetch(`${base}/api/export`, json('POST', { aspect: '16:9', fill: 'blur', preset: 'compatible', title: 'HW' }));
+    await app.renderer.settled();
+    app.renderer.encoders = SOFTWARE;
+    expect((await session()).render).toMatchObject({ state: 'done' });
+    expect((await finished).encoder).toBe(hardware.compatible.kind);
+    const probe = ffprobeJson(path.join(root, 'data', 'output', (await session()).lastOutput!));
+    const v = probe.streams.find((x: any) => x.codec_type === 'video');
+    expect(v).toMatchObject({ codec_name: 'h264', width: 1920, height: 1080, color_transfer: 'bt709' });
+  });
+
+  it('falls back to software when the hardware encoder fails on the real job', async () => {
+    app.renderer.encoders = { compatible: { kind: 'vaapi', device: '/nonexistent' }, original: { kind: 'software' } };
+    const finished = new Promise<RenderSummary>((resolve) => app.renderer.once('finished', resolve));
+    await fetch(`${base}/api/export`, json('POST', { aspect: '16:9', fill: 'bars', preset: 'compatible', title: '' }));
+    await app.renderer.settled();
+    app.renderer.encoders = SOFTWARE;
+    expect((await session()).render).toMatchObject({ state: 'done' });
+    expect((await finished).encoder).toMatch(/^software \(vaapi \(\/nonexistent\) failed: /);
+    const probe = ffprobeJson(path.join(root, 'data', 'output', (await session()).lastOutput!));
+    expect(probe.streams.find((x: any) => x.codec_type === 'video')).toMatchObject({ codec_name: 'h264' });
   });
 
   it('cancels a running render and leaves no partial output', async () => {

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ENCODER_SETTINGS, type EncoderSetting } from './encoders.ts';
 import type { Fonts } from './ffmpeg-args.ts';
 
 export interface Config {
@@ -10,7 +11,13 @@ export interface Config {
   timeZone: string;
   geocoder: 'nominatim' | 'off';
   placeLanguage: string;
+  /** Final encoder: auto (hardware if it works, per OS) or a forced backend. */
+  encoder: EncoderSetting;
+  vaapiDevice: string;
   fonts: Fonts;
+  /** ONNX models for sideways-clip suggestions (`npm run models`). */
+  modelsDir: string;
+  orientation: 'on' | 'off';
   webDist: string | null;
   version: string;
 }
@@ -27,7 +34,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     timeZone: env.TZ?.trim() || 'UTC',
     geocoder: env.GEOCODER === 'off' ? 'off' : 'nominatim',
     placeLanguage: env.PLACE_LANGUAGE?.trim() || 'en',
+    encoder: ENCODER_SETTINGS.find((e) => e === env.ENCODER?.trim().toLowerCase()) ?? 'auto',
+    vaapiDevice: env.VAAPI_DEVICE?.trim() || '/dev/dri/renderD128',
     fonts: resolveFonts(env),
+    modelsDir: path.resolve(env.MODELS_DIR ?? path.resolve(here, '../../models')),
+    orientation: env.ORIENTATION?.trim().toLowerCase() === 'off' ? 'off' : 'on',
     webDist: existsSync(path.join(webDist, 'index.html')) ? webDist : null,
     version: env.APP_VERSION ?? '0.1.0',
   };
@@ -42,6 +53,9 @@ const CJK = [
   '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
   '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
   '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+  // macOS: Hangul, kana and Han in one face.
+  '/System/Library/Fonts/Supplemental/Arial Unicode.ttf',
+  '/System/Library/Fonts/AppleSDGothicNeo.ttc',
 ];
 
 function resolveFonts(env: NodeJS.ProcessEnv): Fonts {

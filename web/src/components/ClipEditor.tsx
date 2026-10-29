@@ -9,6 +9,7 @@ import {
   trimEnd,
   trimStart,
   type Clip,
+  type Rotation,
   type Segment,
 } from '@vto/shared';
 import { api, proxyUrl, stripUrl } from '../api.ts';
@@ -20,6 +21,7 @@ export function ClipEditor({ clip, onClose }: { clip: Clip; onClose: () => void 
   const [time, setTime] = useState(clip.segments[0]?.start ?? 0);
   const [playing, setPlaying] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [rotate, setRotate] = useState<Rotation>(clip.rotate ?? 0);
   const video = useRef<HTMLVideoElement>(null);
   const track = useRef<HTMLDivElement>(null);
   const dirty = useRef(false);
@@ -143,6 +145,23 @@ export function ClipEditor({ clip, onClose }: { clip: Clip; onClose: () => void 
     window.addEventListener('pointerup', up);
   };
 
+  // Rotation is saved at once; the preview turns the proxy with CSS, nothing is re-encoded.
+  const turn = (by: 90 | 270) => {
+    const prev = rotate;
+    const next = ((rotate + by) % 360) as Rotation;
+    setRotate(next);
+    api.setRotate(clip.id, next).then(
+      () => setSaveError(null),
+      (err: Error) => {
+        setRotate(prev);
+        setSaveError(err.message);
+      },
+    );
+  };
+  const quarter = rotate === 90 || rotate === 270;
+  const { width: mw, height: mh } = clip.media!;
+  const aspect = quarter ? mh / mw : mw / mh;
+
   const done = async () => {
     video.current?.pause();
     if (await save()) onClose();
@@ -168,8 +187,10 @@ export function ClipEditor({ clip, onClose }: { clip: Clip; onClose: () => void 
         </button>
       </header>
 
-      <div className="player">
+      <div className="player" style={{ aspectRatio: String(aspect), width: `min(100%, calc(55vh * ${aspect.toFixed(4)}))` }}>
         <video
+          className={quarter ? 'quarter' : undefined}
+          style={rotate ? { transform: `${quarter ? 'translate(-50%, -50%) ' : ''}rotate(${rotate}deg)` } : undefined}
           ref={video}
           src={proxyUrl(clip.id)}
           playsInline
@@ -181,7 +202,7 @@ export function ClipEditor({ clip, onClose }: { clip: Clip; onClose: () => void 
       </div>
 
       <div className="timeline">
-        <div ref={track} className="track" style={{ backgroundImage: `url(${stripUrl(clip.id)})` }} onPointerDown={scrub}>
+        <div ref={track} className="track" style={{ backgroundImage: `url(${stripUrl(clip.id, clip.stripRev)})` }} onPointerDown={scrub}>
           <div className="trimmed" style={{ left: 0, width: pct(first.start) }} />
           <div className="trimmed" style={{ left: pct(last.end), right: 0 }} />
           {segs.map((s, i) =>
@@ -221,6 +242,14 @@ export function ClipEditor({ clip, onClose }: { clip: Clip; onClose: () => void 
         <button className="btn" onClick={() => edit(resetSegments(duration))}>
           Reset
         </button>
+        <span className="rotate-btns">
+          <button className="btn" onClick={() => turn(270)} aria-label="Rotate left" title="Rotate left">
+            ⟲
+          </button>
+          <button className="btn" onClick={() => turn(90)} aria-label="Rotate right" title="Rotate right">
+            ⟳
+          </button>
+        </span>
       </div>
       <p className="muted small center">
         Drag the white handles to trim. Split, then tap a part to remove it. Parts must be at least 1 second long.

@@ -12,9 +12,15 @@ export function snapFps(fps: number): number {
 
 export type Orientation = 'landscape' | 'portrait' | 'square';
 
-export function orientation(c: Clip): Orientation {
+/** Display size after the manual rotation. */
+export function displaySize(c: Clip): { width: number; height: number } {
   const w = c.media?.width ?? 0;
   const h = c.media?.height ?? 0;
+  return c.rotate === 90 || c.rotate === 270 ? { width: h, height: w } : { width: w, height: h };
+}
+
+export function orientation(c: Clip): Orientation {
+  const { width: w, height: h } = displaySize(c);
   if (Math.abs(w - h) <= Math.max(w, h) * 0.02) return 'square';
   return w > h ? 'landscape' : 'portrait';
 }
@@ -28,6 +34,23 @@ export function defaultAspect(clips: readonly Clip[]): Aspect {
   let best: Orientation = 'landscape';
   for (const [o, d] of total) if (d > (total.get(best) ?? 0)) best = o;
   return ASPECT_FOR[best];
+}
+
+/** Transfer characteristic of HLG HDR, the only HDR kept in the output (SPEC §5.7). */
+export const HLG = 'arib-std-b67';
+
+/**
+ * What Original quality adds over Compatible 1080p for these clips: a canvas above 1080p,
+ * and/or HLG HDR kept. Mirrors the planner's canvas and HDR rules.
+ */
+export function originalGains(clips: readonly Clip[], aspect: Aspect): { resolution: boolean; hdr: boolean } {
+  const media = clips.flatMap((c) => (c.media ? [c.media] : []));
+  const long = Math.max(0, ...media.map((m) => Math.max(m.width, m.height)));
+  const short = Math.max(0, ...media.map((m) => Math.min(m.width, m.height)));
+  return {
+    resolution: aspect === '1:1' ? short > 1080 : long > 1920,
+    hdr: media.length > 0 && media.every((m) => m.colorTransfer === HLG),
+  };
 }
 
 function resolutionLabel(c: Clip): string {

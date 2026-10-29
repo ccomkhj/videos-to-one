@@ -3,7 +3,8 @@ import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { keepRanges, type Clip, type ExportOptions, type RenderState } from '@vto/shared';
+import { keepRanges, type Clip, type ExportOptions, type Preset, type RenderState } from '@vto/shared';
+import { describeEncoder, SOFTWARE, type Encoder, type Encoders } from './encoders.ts';
 import { assembleArgs, segmentArgs, type Fonts } from './ffmpeg-args.ts';
 import { CancelledError, measureLoudness, run } from './ffmpeg.ts';
 import { originalPath } from './ingest.ts';
@@ -15,19 +16,45 @@ export interface RendererDeps {
   outputDir: string;
   fonts: Fonts;
   timeZone: string;
+  /** Final-encode backend per preset; software if omitted. */
+  encoders?: Encoders;
 }
 
-// Share of the progress bar per stage.
-const W_LOUDNESS = 0.05;
-const W_SEGMENTS = 0.6;
+/**
+ * Share of the progress bar (and so of the ETA) per stage: loudness, segments; the join gets
+ * the rest. Measured on an Apple M4 with 1080p iPhone clips: per 30 s of footage, segments
+ * take ~7 s, the final x264 encode ~14 s, the x265 one ~30 s and VideoToolbox ~4 s.
+ * A real 17 min VideoToolbox export split 6% / 60% / 34%.
+ */
+const WEIGHTS: Record<Preset | 'hardware', [number, number]> = {
+  compatible: [0.04, 0.31],
+  original: [0.02, 0.18],
+  hardware: [0.06, 0.6],
+};
 
-export class Renderer extends EventEmitter<{ change: [] }> {
+/** One line per finished render, for the server log. */
+export interface RenderSummary {
+  state: 'done' | 'cancelled' | 'error';
+  preset: Preset;
+  /** Final-encode backend that produced the output; notes a fallback to software. */
+  encoder: string;
+  clips: number;
+  /** Output duration, seconds. */
+  duration: number;
+  /** Wall-clock seconds per stage. */
+  seconds: { loudness: number; segments: number; join: number; total: number };
+}
+
+export class Renderer extends EventEmitter<{ change: []; finished: [RenderSummary] }> {
   state: RenderState = { state: 'idle' };
+  /** Final-encode backend per preset. */
+  encoders: Encoders;
   private abort: AbortController | null = null;
   private job: Promise<void> | null = null;
 
   constructor(private readonly deps: RendererDeps) {
     super();
+    this.encoders = deps.encoders ?? SOFTWARE;
   }
 
   get running() {
@@ -60,6 +87,11 @@ export class Renderer extends EventEmitter<{ change: [] }> {
     const { store } = this.deps;
     const workDir = path.join(store.dir, 'render');
     const started = Date.now();
+    let encoder: Encoder = this.encoders[options.preset];
+    let encoderNote = describeEncoder(encoder);
+    const [W_LOUDNESS, W_SEGMENTS] = WEIGHTS[encoder.kind === 'software' ? options.preset : 'hardware'];
+    const marks = { loudness: started, segments: started, join: started };
+    let duration = 0;
     let outFile: string | null = null;
     let final: RenderState;
     const report = (progress: number, step: string) => {
@@ -79,6 +111,7 @@ export class Renderer extends EventEmitter<{ change: [] }> {
         if (clip.media!.hasAudio) loudness[clip.id] = await measureLoudness(src, keepRanges(clip.segments), signal);
         report((W_LOUDNESS * (k + 1)) / clips.length, 'Measuring loudness');
       }
+      marks.loudness = marks.segments = marks.join = Date.now();
 
       const plan = buildPlan({
         clips,
@@ -89,6 +122,7 @@ export class Renderer extends EventEmitter<{ change: [] }> {
         timeZone: this.deps.timeZone,
       });
 
+      duration = plan.totalDuration;
       const total = plan.segments.reduce((s, x) => s + x.duration, 0);
       const intermediates: string[] = [];
       let done = 0;
@@ -105,15 +139,27 @@ export class Renderer extends EventEmitter<{ change: [] }> {
         });
         done += seg.duration;
         intermediates.push(out);
+        marks.segments = marks.join = Date.now();
       }
 
       outFile = uniquePath(path.join(this.deps.outputDir, plan.filename));
-      await run('ffmpeg', assembleArgs(intermediates, plan, outFile), {
-        signal,
-        onProgress: (t) =>
-          report(W_LOUDNESS + W_SEGMENTS + (1 - W_LOUDNESS - W_SEGMENTS) * Math.min(1, t / plan.totalDuration), 'Joining clips'),
-      });
+      const join = (enc: Encoder) =>
+        run('ffmpeg', assembleArgs(intermediates, plan, outFile!, enc), {
+          signal,
+          onProgress: (t) =>
+            report(W_LOUDNESS + W_SEGMENTS + (1 - W_LOUDNESS - W_SEGMENTS) * Math.min(1, t / plan.totalDuration), 'Joining clips'),
+        });
+      try {
+        await join(encoder);
+      } catch (err) {
+        // A hardware encoder passed the startup test but failed on the real job: redo in software.
+        if (encoder.kind === 'software' || signal.aborted) throw err;
+        encoderNote = `software (${describeEncoder(encoder)} failed: ${err instanceof Error ? err.message.slice(0, 200) : err})`;
+        encoder = { kind: 'software' };
+        await join(encoder);
+      }
 
+      marks.join = Date.now();
       store.setLastOutput(path.basename(outFile));
       final = { state: 'done', file: path.basename(outFile) };
     } catch (err) {
@@ -125,6 +171,20 @@ export class Renderer extends EventEmitter<{ change: [] }> {
     await rm(workDir, { recursive: true, force: true });
     this.abort = null;
     this.set(final);
+    const sec = (a: number, b: number) => Math.round((b - a) / 100) / 10;
+    this.emit('finished', {
+      state: final.state as RenderSummary['state'],
+      preset: options.preset,
+      encoder: encoderNote,
+      clips: clips.length,
+      duration,
+      seconds: {
+        loudness: sec(started, marks.loudness),
+        segments: sec(marks.loudness, marks.segments),
+        join: sec(marks.segments, marks.join),
+        total: sec(started, Date.now()),
+      },
+    });
   }
 
   private set(state: RenderState): void {

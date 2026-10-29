@@ -2,7 +2,8 @@
  * Argument builders for every ffmpeg call (SPEC §6.4). Pure, so the generated
  * filter graphs can be snapshot-tested; `ffmpeg.ts` runs them.
  */
-import type { KeepRange, MediaInfo } from '@vto/shared';
+import type { KeepRange, MediaInfo, Preset, Rotation } from '@vto/shared';
+import type { Encoder } from './encoders.ts';
 import { CROSSFADE, HLG, type Plan, type PlanSegment } from './plan.ts';
 
 export interface Fonts {
@@ -43,10 +44,30 @@ export function tonemapChain(transfer: string | undefined): string {
   ].join(',');
 }
 
+/** Tags the frames themselves: generated frames (title card) carry none, and the encoder follows the frames. */
+const colorParams = (hdr: boolean) =>
+  hdr
+    ? `setparams=color_primaries=bt2020:color_trc=${HLG}:colorspace=bt2020nc`
+    : 'setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709';
+
 const colorFlags = (hdr: boolean) =>
   hdr
     ? ['-color_primaries', 'bt2020', '-color_trc', HLG, '-colorspace', 'bt2020nc']
     : ['-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709'];
+
+/** The manual clockwise rotation as a filter, or null for none. */
+export function rotateFilter(r: Rotation | undefined): string | null {
+  switch (r) {
+    case 90:
+      return 'transpose=clock';
+    case 180:
+      return 'hflip,vflip';
+    case 270:
+      return 'transpose=cclock';
+    default:
+      return null;
+  }
+}
 
 /** 720p SDR H.264 with a 1 s GOP for fast seeking in the editor. */
 export function proxyArgs(src: string, media: Pick<MediaInfo, 'width' | 'height' | 'hdr' | 'colorTransfer'>, out: string): string[] {
@@ -66,11 +87,12 @@ export function proxyArgs(src: string, media: Pick<MediaInfo, 'width' | 'height'
 }
 
 /** Ten thumbnails side by side, read from the (already SDR) proxy. */
-export function stripArgs(proxy: string, duration: number, out: string): string[] {
+export function stripArgs(proxy: string, duration: number, out: string, rotate?: Rotation): string[] {
+  const vf = [rotateFilter(rotate), `fps=${n(10 / Math.max(duration, 0.1))},scale=-2:120,tile=10x1`].filter(Boolean).join(',');
   return [
     ...BASE,
     '-i', proxy,
-    '-vf', `fps=${n(10 / Math.max(duration, 0.1))},scale=-2:120,tile=10x1`,
+    '-vf', vf,
     '-frames:v', '1', '-q:v', '4',
     out,
   ];
@@ -181,19 +203,21 @@ export function segmentArgs(seg: PlanSegment, plan: Plan, ctx: SegmentContext): 
   let audio: string;
   if (seg.kind === 'title') {
     inputs = ['-f', 'lavfi', '-i', `color=c=black:s=${W}x${H}:r=${plan.fps}:d=${d}`, ...silence];
-    video = ['[0:v]setsar=1', ...textChain(seg, plan, ctx), `format=${pix}[v]`].join(',');
+    video = ['[0:v]setsar=1', ...textChain(seg, plan, ctx), `format=${pix}`, `${colorParams(plan.hdr)}[v]`].join(',');
     audio = `[1:a]${audioFmt}[a]`;
   } else {
     inputs = ['-ss', n(seg.start), '-t', d, '-i', seg.source, ...(seg.hasAudio ? [] : silence)];
     const tonemap = seg.hdr && !plan.hdr ? [tonemapChain(seg.colorTransfer)] : [];
     video = [
       '[0:v]setpts=PTS-STARTPTS',
+      ...(seg.rotate ? [rotateFilter(seg.rotate)!] : []),
       ...tonemap,
       `fps=${plan.fps}`,
       'tpad=stop_mode=clone:stop_duration=1',
       fillChain(plan),
       ...textChain(seg, plan, ctx),
-      `format=${pix}[v]`,
+      `format=${pix}`,
+      `${colorParams(plan.hdr)}[v]`,
     ].join(',');
     const gain = seg.gainDb !== 0 ? `,volume=${n(seg.gainDb)}dB` : '';
     audio = seg.hasAudio ? `[0:a]asetpts=PTS-STARTPTS,${audioFmt}${gain},apad[a]` : `[1:a]${audioFmt}[a]`;
@@ -213,37 +237,93 @@ export function segmentArgs(seg: PlanSegment, plan: Plan, ctx: SegmentContext): 
   ];
 }
 
-/** Crossfade the intermediates together and encode the final MP4 (SPEC §6.4 step 4). */
-export function assembleArgs(inputs: readonly string[], plan: Plan, out: string): string[] {
-  const ins = inputs.flatMap((f) => ['-i', f]);
-  let map: string[];
-  if (inputs.length === 1) {
-    map = ['-map', '0:v', '-map', '0:a'];
-  } else {
-    const parts: string[] = [];
-    let v = '[0:v]';
-    let a = '[0:a]';
-    for (let i = 1; i < inputs.length; i++) {
-      const last = i === inputs.length - 1;
-      const vo = last ? '[vout]' : `[v${i}]`;
-      const ao = last ? '[aout]' : `[a${i}]`;
-      parts.push(`${v}[${i}:v]xfade=transition=fade:duration=${CROSSFADE}:offset=${n(plan.offsets[i - 1]!)}${vo}`);
-      parts.push(`${a}[${i}:a]acrossfade=d=${CROSSFADE}:c1=tri:c2=tri${ao}`);
-      v = vo;
-      a = ao;
-    }
-    map = ['-filter_complex', parts.join(';'), '-map', '[vout]', '-map', '[aout]'];
-  }
+interface VideoEncode {
+  /** Global options before the inputs. */
+  pre: string[];
+  /** Filters ending the video graph: pixel format, color tags, upload to the GPU if needed. */
+  tail: string;
+  codec: string[];
+}
 
-  const video =
-    plan.preset === 'compatible'
-      ? ['-c:v', 'libx264', '-preset', 'medium', '-profile:v', 'high', '-crf', '20', '-pix_fmt', 'yuv420p']
-      : [
-          '-c:v', 'libx265', '-preset', 'medium', '-crf', '20', '-pix_fmt', 'yuv420p10le', '-tag:v', 'hvc1',
-          '-x265-params',
-          plan.hdr ? `log-level=error:colorprim=bt2020:transfer=${HLG}:colormatrix=bt2020nc` : 'log-level=error',
-        ];
+/** Final video encoder settings per backend; quality targets roughly match x264/x265 CRF 20. */
+export function videoEncode(encoder: Encoder, preset: Preset, hdr: boolean): VideoEncode {
+  const hevc = preset === 'original';
+  const tail = (pix: string, upload = false) => [`format=${pix}`, colorParams(hdr), ...(upload ? ['hwupload'] : [])].join(',');
+  switch (encoder.kind) {
+    case 'software':
+      return {
+        pre: [],
+        tail: tail(hevc ? 'yuv420p10le' : 'yuv420p'),
+        codec: hevc
+          ? [
+              '-c:v', 'libx265', '-preset', 'medium', '-crf', '20', '-pix_fmt', 'yuv420p10le', '-tag:v', 'hvc1',
+              '-x265-params',
+              hdr ? `log-level=error:colorprim=bt2020:transfer=${HLG}:colormatrix=bt2020nc` : 'log-level=error',
+            ]
+          : ['-c:v', 'libx264', '-preset', 'medium', '-profile:v', 'high', '-crf', '20', '-pix_fmt', 'yuv420p'],
+      };
+    case 'videotoolbox':
+      return {
+        pre: [],
+        tail: tail(hevc ? 'p010le' : 'yuv420p'),
+        codec: hevc
+          ? ['-c:v', 'hevc_videotoolbox', '-q:v', '65', '-profile:v', 'main10', '-pix_fmt', 'p010le', '-tag:v', 'hvc1']
+          : ['-c:v', 'h264_videotoolbox', '-q:v', '65', '-profile:v', 'high', '-pix_fmt', 'yuv420p'],
+      };
+    case 'nvenc': {
+      const rc = ['-preset', 'p5', '-tune', 'hq', '-rc', 'vbr', '-cq', '21', '-b:v', '0'];
+      return {
+        pre: [],
+        tail: tail(hevc ? 'p010le' : 'yuv420p'),
+        codec: hevc
+          ? ['-c:v', 'hevc_nvenc', ...rc, '-profile:v', 'main10', '-pix_fmt', 'p010le', '-tag:v', 'hvc1']
+          : ['-c:v', 'h264_nvenc', ...rc, '-profile:v', 'high', '-pix_fmt', 'yuv420p'],
+      };
+    }
+    case 'vaapi':
+      return {
+        pre: ['-vaapi_device', encoder.device ?? '/dev/dri/renderD128'],
+        tail: tail(hevc ? 'p010' : 'nv12', true),
+        codec: hevc
+          ? ['-c:v', 'hevc_vaapi', '-qp', '22', '-profile:v', 'main10', '-tag:v', 'hvc1']
+          : ['-c:v', 'h264_vaapi', '-qp', '22', '-profile:v', 'high'],
+      };
+  }
+}
+
+/** A half-second test encode: does this encoder work here for this preset? */
+export function encoderProbeArgs(encoder: Encoder, preset: Preset): string[] {
+  const enc = videoEncode(encoder, preset, false);
+  return [
+    ...BASE,
+    ...enc.pre,
+    '-f', 'lavfi', '-i', 'testsrc2=s=1280x720:r=30:d=0.5',
+    '-filter_complex', `[0:v]${enc.tail}[v]`,
+    '-map', '[v]',
+    ...enc.codec,
+    '-f', 'null', '-',
+  ];
+}
+
+/** Crossfade the intermediates together and encode the final MP4 (SPEC §6.4 step 4). */
+export function assembleArgs(inputs: readonly string[], plan: Plan, out: string, encoder: Encoder = { kind: 'software' }): string[] {
+  const enc = videoEncode(encoder, plan.preset, plan.hdr);
+  const ins = inputs.flatMap((f) => ['-i', f]);
+  const parts: string[] = [];
+  let v = '[0:v]';
+  let a = '[0:a]';
+  for (let i = 1; i < inputs.length; i++) {
+    const last = i === inputs.length - 1;
+    const vo = `[v${i}]`;
+    const ao = last ? '[aout]' : `[a${i}]`;
+    parts.push(`${v}[${i}:v]xfade=transition=fade:duration=${CROSSFADE}:offset=${n(plan.offsets[i - 1]!)}${vo}`);
+    parts.push(`${a}[${i}:a]acrossfade=d=${CROSSFADE}:c1=tri:c2=tri${ao}`);
+    v = vo;
+    a = ao;
+  }
+  parts.push(`${v}${enc.tail}[vout]`);
+  const map = ['-filter_complex', parts.join(';'), '-map', '[vout]', '-map', inputs.length === 1 ? '0:a' : '[aout]'];
   const audio = ['-c:a', 'aac', '-b:a', plan.preset === 'compatible' ? '192k' : '256k', '-ar', '48000', '-ac', '2'];
 
-  return [...BASE, ...ins, ...map, ...video, ...colorFlags(plan.hdr), ...audio, '-movflags', '+faststart', ...PROGRESS, out];
+  return [...BASE, ...enc.pre, ...ins, ...map, ...enc.codec, ...colorFlags(plan.hdr), ...audio, '-movflags', '+faststart', ...PROGRESS, out];
 }

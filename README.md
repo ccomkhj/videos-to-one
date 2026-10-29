@@ -51,10 +51,27 @@ If `PUBLIC_HOST` isn't set, everything still works; type `http://<ip>:8080` on t
 - **iPhone uploads from Safari may lose the location or original date.** Clips without them
   show a hint. For those, AirDrop the clips to the computer and drag them into the browser
   window there: the original files keep all metadata.
+  The Photos picker also re-encodes HDR clips to SDR H.264. Location and date survive it, but
+  if you want HDR or the best quality kept, use the AirDrop route for every clip.
 - Keep the phone's screen on while uploading. iOS pauses uploads in the background; failed
   uploads can be retried, and clips that already arrived are kept.
 - *Compatible 1080p* is the default and the fastest. *Original quality* (HEVC, up to 4K, HDR
-  kept when every clip is HDR) is much slower, because Docker has no hardware encoder.
+  kept when every clip is HDR) is much slower without a hardware encoder (see below).
+
+## Faster renders (hardware encoding)
+
+The final encode uses a hardware encoder when one is available and passes a quick test at
+startup; otherwise software. The server log shows which one it picked
+(`Final encoder: …`) and the time of each render.
+
+- **macOS:** Docker Desktop can't reach the Mac's encoder. For VideoToolbox, run the app
+  natively (see Development below). On an M4, a 17 min export went from 29 min to 7 min.
+- **Linux, Intel/AMD GPU (VAAPI):** add `--device /dev/dri` to `docker run`.
+- **Linux, NVIDIA (NVENC):** install the NVIDIA Container Toolkit and add
+  `--gpus all -e NVIDIA_DRIVER_CAPABILITIES=video,compute,utility`.
+
+The Linux GPU paths aren't tested on real hardware yet; if the log says `software`, the
+image's ffmpeg couldn't use the GPU. Set `ENCODER=software` to turn this off.
 
 ## Security
 
@@ -71,6 +88,10 @@ Stop the container when you're done, and be careful on hotel or café Wi-Fi.
 | `TZ` | `UTC` | Fallback timezone for clips with neither a UTC offset nor GPS |
 | `GEOCODER` | `nominatim` | `nominatim`, or `off` for fully offline use |
 | `PLACE_LANGUAGE` | `en` | Language for place names |
+| `ENCODER` | `auto` | Final encoder: `auto`, `software`, `videotoolbox`, `nvenc` or `vaapi` |
+| `VAAPI_DEVICE` | `/dev/dri/renderD128` | VAAPI render node |
+| `ORIENTATION` | `on` | `off` turns off "looks sideways" suggestions (manual rotate still works) |
+| `MODELS_DIR` | `<repo>/models` | Where `npm run models` puts the detection models |
 
 Known quirk: some Android phones write local time into `creation_time` as if it were UTC.
 This can't be detected reliably, so those clips may show a date that is off around midnight.
@@ -78,9 +99,15 @@ This can't be detected reliably, so those clips may show a date that is off arou
 ## Development
 
 Requires Node 22+ and ffmpeg/ffprobe (with libx264, libx265, libfreetype, libzimg) on `PATH`.
+On macOS, Homebrew's `ffmpeg` lacks libfreetype (renders fail with "No such filter:
+'drawtext'"); use `brew install ffmpeg-full` and put `/opt/homebrew/opt/ffmpeg-full/bin`
+first on `PATH`. There are no Linux font paths on macOS either, so also set e.g.
+`FONT_LATIN=/System/Library/Fonts/Supplemental/Arial.ttf`. Korean/Japanese/Chinese text uses
+macOS's Arial Unicode automatically (override with `FONT_CJK`).
 
 ```bash
 npm install
+npm run models      # sideways-clip detection models (~82 MB, into models/); optional
 npm test            # unit + snapshot + end-to-end tests (real ffmpeg, synthetic clips)
 npm run typecheck
 DATA_DIR=.data npm run dev   # API on :8080, Vite dev server on :5173 (proxies /api)

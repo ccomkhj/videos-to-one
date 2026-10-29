@@ -64,3 +64,21 @@ export async function measureLoudness(src: string, ranges: readonly KeepRange[],
   const num = (s: string) => (s === '-inf' ? -Infinity : Number(s));
   return { i: num(parsed.input_i), tp: num(parsed.input_tp) };
 }
+
+/** Runs ffmpeg and returns stdout as raw bytes (decoded frames for orientation detection). */
+export function runBuffer(args: string[]): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const chunks: Buffer[] = [];
+    let stderr = '';
+    child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString()).slice(-16_000);
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve(Buffer.concat(chunks));
+      else reject(new Error(`ffmpeg exited with ${code}: ${stderr.trim().split('\n').slice(-3).join(' | ')}`));
+    });
+  });
+}

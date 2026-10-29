@@ -4,7 +4,9 @@
  * Pure: loudness is measured beforehand and passed in.
  */
 import {
+  displaySize,
   formatDate,
+  HLG,
   formatDateRange,
   keepRanges,
   snapFps,
@@ -12,6 +14,7 @@ import {
   type ExportOptions,
   type Fill,
   type Preset,
+  type Rotation,
 } from '@vto/shared';
 import { localTime } from './metadata.ts';
 
@@ -20,7 +23,7 @@ export const OVERLAY_SECONDS = 4;
 export const TITLE_SECONDS = 3;
 const TARGET_LUFS = -16;
 const TARGET_TP = -1.5;
-export const HLG = 'arib-std-b67';
+export { HLG };
 
 export interface Loudness {
   /** Integrated loudness, LUFS (-Infinity for silence). */
@@ -56,6 +59,8 @@ export interface ClipSegment {
   colorTransfer?: string;
   hasAudio: boolean;
   gainDb: number;
+  /** Manual clockwise rotation; omitted when 0. */
+  rotate?: Rotation;
   overlay: Overlay | null;
 }
 
@@ -109,6 +114,7 @@ export function buildPlan(input: PlanInput): Plan {
         ...(media.colorTransfer ? { colorTransfer: media.colorTransfer } : {}),
         hasAudio: media.hasAudio,
         gainDb,
+        ...(clip.rotate ? { rotate: clip.rotate } : {}),
         overlay: k === 0 ? overlayFor(clip, duration) : null,
       });
     });
@@ -160,8 +166,9 @@ function canvasFor(options: ExportOptions, clips: Clip[]): Plan['canvas'] {
   let long = 1920;
   let square = 1080;
   if (options.preset === 'original') {
-    const longs = clips.map((c) => Math.max(c.media!.width, c.media!.height));
-    const shorts = clips.map((c) => Math.min(c.media!.width, c.media!.height));
+    const sizes = clips.map(displaySize);
+    const longs = sizes.map((s) => Math.max(s.width, s.height));
+    const shorts = sizes.map((s) => Math.min(s.width, s.height));
     long = even(clamp(Math.max(0, ...longs), 1920, 3840));
     square = even(clamp(Math.max(0, ...shorts), 1080, 2160));
   }

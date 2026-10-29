@@ -8,6 +8,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import {
+  ROTATIONS,
   validateSegments,
   type AppInfo,
   type Aspect,
@@ -15,23 +16,29 @@ import {
   type Fill,
   type LatLon,
   type Preset,
+  type Rotation,
   type SessionSnapshot,
 } from '@vto/shared';
 import type { Config } from './config.ts';
+import type { Encoders } from './encoders.ts';
 import type { Geocoder } from './geocode.ts';
 import { Ingest, originalPath } from './ingest.ts';
+import { OrientationDetector } from './orientation.ts';
 import { Renderer } from './render.ts';
 import { SessionStore } from './session.ts';
 
 export interface AppDeps {
   geocoder: Geocoder;
   tzAt: (loc: LatLon) => string | undefined;
+  /** Final-encode backends from `detectEncoders`; software if omitted. */
+  encoders?: Encoders;
 }
 
 export interface App {
   server: FastifyInstance;
   store: SessionStore;
   ingest: Ingest;
+  detector: OrientationDetector;
   renderer: Renderer;
 }
 
@@ -46,11 +53,27 @@ export async function buildApp(config: Config, deps: AppDeps): Promise<App> {
   await store.load();
   await mkdir(sessionDir, { recursive: true });
 
-  const ingest = new Ingest({ store, geocoder: deps.geocoder, tzAt: deps.tzAt, timeZone: config.timeZone });
-  const renderer = new Renderer({ store, outputDir, fonts: config.fonts, timeZone: config.timeZone });
+  const detector = new OrientationDetector({ store, modelsDir: config.modelsDir, enabled: config.orientation === 'on' });
+  const ingest = new Ingest({
+    store,
+    geocoder: deps.geocoder,
+    tzAt: deps.tzAt,
+    timeZone: config.timeZone,
+    onReady: (id) => detector.enqueue(id),
+  });
+  const renderer = new Renderer({
+    store,
+    outputDir,
+    fonts: config.fonts,
+    timeZone: config.timeZone,
+    ...(deps.encoders ? { encoders: deps.encoders } : {}),
+  });
 
-  // Clips interrupted by a restart are analyzed again.
-  for (const clip of store.ordered()) if (clip.status === 'analyzing') ingest.enqueue(clip.id);
+  // Clips interrupted by a restart are analyzed again; ready clips never checked for orientation are checked now.
+  for (const clip of store.ordered()) {
+    if (clip.status === 'analyzing') ingest.enqueue(clip.id);
+    else if (clip.status === 'ready' && !clip.orientation) detector.enqueue(clip.id);
+  }
 
   const server = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
   await server.register(fastifyMultipart, { limits: { fileSize: 50 * 1024 ** 3, files: 1, fields: 5 } });
@@ -152,14 +175,36 @@ export async function buildApp(config: Config, deps: AppDeps): Promise<App> {
     return snapshot();
   });
 
-  server.patch<{ Params: { id: string }; Body: { segments?: unknown } }>('/api/clips/:id', async (req, reply) => {
-    const clip = store.get(req.params.id);
-    if (!clip) return reply.code(404).send({ error: 'No such clip' });
-    if (!clip.media) return reply.code(409).send({ error: 'Clip is still being analyzed' });
-    const error = validateSegments(req.body?.segments, clip.media.duration);
-    if (error) return reply.code(400).send({ error });
-    return store.update(clip.id, { segments: req.body.segments as typeof clip.segments });
-  });
+  server.patch<{ Params: { id: string }; Body: { segments?: unknown; rotate?: unknown; dismissSuggestion?: unknown } }>(
+    '/api/clips/:id',
+    async (req, reply) => {
+      const clip = store.get(req.params.id);
+      if (!clip) return reply.code(404).send({ error: 'No such clip' });
+      if (!clip.media) return reply.code(409).send({ error: 'Clip is still being analyzed' });
+      const body = req.body ?? {};
+      const patch: Partial<typeof clip> = {};
+      if (body.segments !== undefined) {
+        const error = validateSegments(body.segments, clip.media.duration);
+        if (error) return reply.code(400).send({ error });
+        patch.segments = body.segments as typeof clip.segments;
+      }
+      if (body.rotate !== undefined) {
+        if (!ROTATIONS.includes(body.rotate as Rotation)) return reply.code(400).send({ error: 'rotate must be 0, 90, 180 or 270' });
+        patch.rotate = body.rotate as Rotation;
+      }
+      if (body.dismissSuggestion !== undefined) {
+        if (body.dismissSuggestion !== true) return reply.code(400).send({ error: 'dismissSuggestion must be true' });
+        if (clip.orientation) patch.orientation = { ...clip.orientation, dismissed: true };
+      }
+      if (Object.keys(patch).length === 0 && body.dismissSuggestion === undefined) {
+        return reply.code(400).send({ error: 'Send segments, rotate and/or dismissSuggestion' });
+      }
+      const rotated = patch.rotate !== undefined && patch.rotate !== (clip.rotate ?? 0);
+      const updated = store.update(clip.id, patch);
+      if (rotated) void ingest.restrip(clip.id);
+      return updated;
+    },
+  );
 
   server.put<{ Body: { ids?: unknown; sort?: unknown } }>('/api/order', async (req, reply) => {
     const body = req.body ?? {};
@@ -215,7 +260,7 @@ export async function buildApp(config: Config, deps: AppDeps): Promise<App> {
     return reply.code(404).send({ error: 'Not found' });
   });
 
-  return { server, store, ingest, renderer };
+  return { server, store, ingest, detector, renderer };
 }
 
 const asciiName = (name: string) => name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '');

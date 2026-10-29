@@ -35,6 +35,19 @@ export interface MediaInfo {
   videoCodec: string;
 }
 
+/** Clockwise quarter turns, applied after the file's own display-matrix rotation. */
+export type Rotation = 0 | 90 | 180 | 270;
+export const ROTATIONS: readonly Rotation[] = [0, 90, 180, 270];
+
+/** What orientation detection suggests for a clip (SPEC §5.x). */
+export interface OrientationSuggestion {
+  suggested: Rotation;
+  source: 'faces' | 'model';
+  confidence: number;
+  /** "Keep" was pressed: stop suggesting it. */
+  dismissed?: boolean;
+}
+
 export type ClipStatus = 'analyzing' | 'ready' | 'error';
 
 export interface Clip {
@@ -51,6 +64,12 @@ export interface Clip {
   location?: LatLon;
   place?: string;
   segments: Segment[];
+  /** Manual rotation chosen by the user; missing means 0. */
+  rotate?: Rotation;
+  /** Detection result; missing means not analyzed yet. */
+  orientation?: OrientationSuggestion;
+  /** Bumped when strip.jpg is regenerated, to bust caches. */
+  stripRev?: number;
 }
 
 export type Aspect = '16:9' | '9:16' | '1:1';
