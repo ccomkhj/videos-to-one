@@ -51,6 +51,8 @@ If `PUBLIC_HOST` isn't set, everything still works; type `http://<ip>:8080` on t
 - **iPhone uploads from Safari may lose the location or original date.** Clips without them
   show a hint. For those, AirDrop the clips to the computer and drag them into the browser
   window there: the original files keep all metadata.
+  The Photos picker also re-encodes HDR clips to SDR H.264. Location and date survive it, but
+  if you want HDR or the best quality kept, use the AirDrop route for every clip.
 - Keep the phone's screen on while uploading. iOS pauses uploads in the background; failed
   uploads can be retried, and clips that already arrived are kept.
 - *Compatible 1080p* is the default and the fastest. *Original quality* (HEVC, up to 4K, HDR
@@ -78,6 +80,10 @@ This can't be detected reliably, so those clips may show a date that is off arou
 ## Development
 
 Requires Node 22+ and ffmpeg/ffprobe (with libx264, libx265, libfreetype, libzimg) on `PATH`.
+On macOS, Homebrew's `ffmpeg` lacks libfreetype (renders fail with "No such filter:
+'drawtext'"); use `brew install ffmpeg-full` and put `/opt/homebrew/opt/ffmpeg-full/bin`
+first on `PATH`. There are no Linux font paths on macOS either, so also set e.g.
+`FONT_LATIN=/System/Library/Fonts/Supplemental/Arial.ttf`.
 
 ```bash
 npm install

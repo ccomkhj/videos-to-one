@@ -1,6 +1,6 @@
 # videos-to-one — Product & Technical Spec (v1)
 
-> Status: **agreed** — ready to start M0 (iOS upload spike). No code yet.
+> Status: **agreed**. M0–M4 done; M0 results are in [docs/spike-ios-upload.md](docs/spike-ios-upload.md).
 > Scope agreed in a Q&A session on 2026-10-29; the decision log is at the end.
 
 ## 1. Goal
